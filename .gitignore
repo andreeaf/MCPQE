@@ -1,0 +1,11 @@
+deterministic_wfn_propagator_tucc/*
+*.out
+quantum_circuits/__pycache__/*
+*.aux
+*.fdb_latexmk
+*.fls
+*.log
+*.pdf
+*.tex
+*pylint.txt
+

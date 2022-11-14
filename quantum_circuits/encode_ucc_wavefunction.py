@@ -6,12 +6,11 @@ from pytket.pauli import Pauli, QubitPauliString
 
 from pytket.extensions.qiskit import AerStateBackend, AerBackend
 import utils
-import numpy as np
 
-def ucc_circuit(qubit_operator, nqubits):
+def ucc_circuit(qubit_operator, params, nqubits):
     '''Generate corresponding UCC circuit from qubit operator'''
 
-    pauli_strings = utils.pauli_strings_from_fermion_operators(qubit_operator)
+    pauli_strings = utils.pauli_strings_from_fermion_operators(qubit_operator, params)
     circ = Circuit(nqubits)
 
     for pauli_str in pauli_strings:
@@ -21,27 +20,27 @@ def ucc_circuit(qubit_operator, nqubits):
 def add_controlled_pauli_exp_box(circ, pauli_str, control):
     qubits = pauli_str[2]
     paulis = pauli_str[0]
-    for index in range(len(qubits)):
+    for index, qubit in enumerate(qubits):
         if paulis[index] == Pauli.X:
-            circ.H(Qubit(qubits[index]))
+            circ.H(Qubit(qubit))
         if paulis[index] == Pauli.Y:
-            circ.V(Qubit(qubits[index])) 
-    for index in range(len(qubits)-1):
-        circ.CX(Qubit(qubits[index]), Qubit(qubits[index+1]))
+            circ.V(Qubit(qubit))
+    for index, qubit in enumerate(qubits[:-1]):
+        circ.CX(Qubit(qubit), Qubit(qubits[index+1]))
     circ.CRz(pauli_str[1], control, qubits[-1])
     for index in range(len(qubits)-1, 0, -1):
         circ.CX(Qubit(qubits[index-1]), Qubit(qubits[index]))
-    for index in range(len(qubits)):
+    for index, qubit in enumerate(qubits):
         if paulis[index] == Pauli.X:
-            circ.H(Qubit(qubits[index]))
+            circ.H(Qubit(qubit))
         if paulis[index] == Pauli.Y:
-            circ.Vdg(Qubit(qubits[index])) 
+            circ.Vdg(Qubit(qubit))
     return circ
 
-def generate_overlap_measurement_circ(occ1, occ2, nqubits, operators):
+def generate_overlap_measurement_circ(occ1, occ2, nqubits, operators, params):
     '''Generate overlap measurement circuit between U|D_1> and |D_2>'''
 
-    ucc_circ = ucc_circuit(operators, nqubits)
+    ucc_circ = ucc_circuit(operators, params, nqubits)
     measurement = utils.generate_two_det_state(occ1, occ2, nqubits)
     for qubit in range(nqubits):
         measurement.CSWAP(0, qubit + 1, nqubits + 1 + qubit)
@@ -102,8 +101,9 @@ def measure_hamil_overlap(mcirc, ps_g, nqubits, shots= False, n_shots = 0):
     else:
         backend = AerStateBackend()
         comp_circ = backend.get_compiled_circuit(mcirc)
-        for pauli_str in ps_h:
-            hamil_elem += pauli_str[1]*backend.get_pauli_expectation_value(comp_circ,
+        for pauli_gr in ps_g:
+            for pauli_str in pauli_gr:
+                hamil_elem += pauli_str[1]*backend.get_pauli_expectation_value(comp_circ,
                                                  QubitPauliString([Qubit(x) for x in pauli_str[2]],
                                                  pauli_str[0]))
     return hamil_elem

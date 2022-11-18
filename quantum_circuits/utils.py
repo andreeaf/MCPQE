@@ -1,28 +1,48 @@
+''' Various overlap/operator measurement utility functions.'''
+
 from pytket.pauli import Pauli, QubitPauliString
 from pytket.extensions.qiskit import AerStateBackend, AerBackend
-from pytket.circuit import Circuit, Qubit, Bit
+from pytket.circuit import Qubit, Bit
 from openfermion.transforms import normal_ordered
-from openfermion.ops import FermionOperator
+from openfermion.ops import FermionOperator, QubitOperator
 
 import numpy as np
 
-def pauli_strings_from_fermion_operators(operators, params, ancilla = 0):
+def pauli_strings_from_fermion_operators(operators: dict,
+                                         params: dict,
+                                         ancilla: int = 0):
+    '''Function to get parametrised Pauli strings from qubit operators and their
+    IN:
+    corresponding parameters.
+    operators: dict of operators corresponding to excitations to a given
+               determinant.
+    params: dict of corresponding coefficients.
+    ancilla: number of ancilla qubits the circuit will have - for correct qubit
+              labels.
+    Returns:
+    pauli_strings: list of all parametrised Pauli strings.
+    '''
     pauli_gate = {'X': Pauli.X, 'Y': Pauli.Y, 'Z': Pauli.Z, 'I': Pauli.I}
     pauli_strings = []
-    k = 0
-    for operator in operators:
+    for det, operator in operators.items():
         for term, coeff in operator.terms.items():
             paulis = []
             qubits = []
             for gate in term:
                 paulis.append(pauli_gate[gate[1]])
                 qubits.append(gate[0] + ancilla)
-            pauli_strings.append([paulis, params[k]*coeff.imag/np.pi*2, qubits])
-        k += 1
+            pauli_strings.append([paulis, params[det]*coeff.imag/np.pi*2, qubits])
     return pauli_strings
 
 
-def pauli_strings_from_fermion_operators_measurements(operators):
+def pauli_strings_from_fermion_operators_measurements(operators: list[QubitOperator]):
+    '''Function to get Pauli strings corresponding to operators to be measured
+    in a circuit with one ancilla qubit on which a Z operation is measured.
+    IN:
+    operators: list of QubitOperators
+    Returns:
+    pauli_strings: list of all parametrised Pauli strings
+    '''
     pauli_gate = {'X': Pauli.X, 'Y': Pauli.Y, 'Z': Pauli.Z, 'I': Pauli.I}
     pauli_strings = []
     for operator in operators:
@@ -35,7 +55,13 @@ def pauli_strings_from_fermion_operators_measurements(operators):
             pauli_strings.append([paulis, coeff.real, qubits])
     return pauli_strings
 
-def group_pauli_strings(pauli_strings):
+def group_pauli_strings(pauli_strings: list):
+    '''Function to group Pauli strings that require the same measurement circuit.
+    IN:
+    pauli_strings:list of all parametrised Pauli strings
+    Returns:
+    groups:list of all groups of parametrised Pauli strings
+    '''
     groups = {}
     for string in pauli_strings:
         matched = False
@@ -53,16 +79,6 @@ def group_pauli_strings(pauli_strings):
         if not matched:
             groups[(tuple(no_z_str), tuple(no_z_qub))] = [string]
     return groups
-
-def generate_two_det_state(occ1, occ2, nqubits):
-    circ = Circuit(2*nqubits + 1, 1)
-    circ.H(0)
-    for index in occ1:
-        circ.CX(0, index + 1)
-    circ.X(0)
-    for index in occ2:
-        circ.CX(0, index + 1)
-    return circ
 
 def generate_overlap_measurement(mcirc):
     backend = AerBackend()
@@ -111,14 +127,14 @@ def generate_excitation_strings(dets, ref, nspin_orb):
                 else:
                     ex_str += (str(index) + '^ ')
                     deex_str += (str(index) + ' ')
-        excitation_strings[det_str] = ex_str
-        deexcitation_strings[det_str] = deex_str
+        excitation_strings[det] = ex_str
+        deexcitation_strings[det] = deex_str
     return excitation_strings, deexcitation_strings
 
 def generate_excitation_operators(dets, ref, nspin_orb):
     ex, deex = generate_excitation_strings(dets, ref, nspin_orb)
-    operators = [normal_ordered(FermionOperator(ex[i])) -
-                 normal_ordered(FermionOperator(deex[i])) for i in ex]
+    operators = {i: normal_ordered(FermionOperator(ex[i])) -
+                 normal_ordered(FermionOperator(deex[i])) for i in ex}
 
     return operators
 
@@ -160,9 +176,46 @@ def generate_hamil_overlap_measure_circuits(mcirc, ps_g, nqubits):
         circs[pauli_gr] = comp_circ.copy()
     return circs
 
+def generate_hamil_apply_circ(mcirc, ps_g, nqubits):
+    backend = AerBackend()
+    circs = {}
+    for pauli_gr in ps_g:
+        measurement_circ = mcirc.copy()
+        for index in range(len(pauli_gr[0])):
+            if pauli_gr[0][index] == Pauli.X:
+                measurement_circ.X(pauli_gr[1][index]-1)
+            if pauli_gr[0][index] == Pauli.Y:
+                measurement_circ.Y(pauli_gr[1][index]-1)
+            if pauli_gr[0][index] == Pauli.Z:
+                measurement_circ.Z(pauli_gr[1][index]-1)
+        for index in range(nqubits):
+            measurement_circ.add_bit(Bit(index))
+        measurement_circ.measure_all()
+        comp_circ = backend.get_compiled_circuit(measurement_circ)
+        circs[pauli_gr] = comp_circ.copy()
+    return circs
+
+def generate_hamil_overlap_measure_circuits(mcirc, ps_g, nqubits):
+    backend = AerBackend()
+    circs = {}
+    for pauli_gr in ps_g:
+        measurement_circ = mcirc.copy()
+        for index in range(len(pauli_gr[0])):
+            if pauli_gr[0][index] == Pauli.X:
+                measurement_circ.H(pauli_gr[1][index])
+            if pauli_gr[0][index] == Pauli.Y:
+                measurement_circ.V(pauli_gr[1][index])
+        for index in range(nqubits):
+            measurement_circ.add_bit(Bit(index+1))
+        measurement_circ.measure_all()
+        comp_circ = backend.get_compiled_circuit(measurement_circ)
+        circs[pauli_gr] = comp_circ.copy()
+    return circs
+
 def measure_hamil_overlap_shots(ps_g, circuits, n_shots):
     backend = AerBackend()
     hamil_elem = 0
+    all_counts = []
     for pauli_group, circ in circuits.items():
         handle = backend.process_circuit(circ, n_shots = n_shots)
         counts = backend.get_result(handle).get_counts()
@@ -175,4 +228,50 @@ def measure_hamil_overlap_shots(ps_g, circuits, n_shots):
                         sign *= -1
                 avg += sign * counts[count]
             hamil_elem += pauli_str[1] * avg/n_shots
-    return hamil_elem
+        for count in counts:
+            if count not in all_counts:
+                all_counts.append(count)
+    return hamil_elem, all_counts
+
+def generate_new_dets_list(dets, shots, nqubits, sym = None, sym_ref = 0):
+    new = False
+    no_ref = len([x for x in dets[0] if x%2==1])
+    for shot in shots:
+        det = tuple([i for i in range(nqubits) if shot[i] == 1])
+        diff = 0
+        for orb in det:
+            if orb not in dets[0]:
+                diff +=1
+        symm = True
+        if sym is not None:
+            det_sym = 0
+            for i in det:
+               det_sym  ^= sym[i]
+            if det_sym != sym_ref:
+                symm = False
+        num_odd = len([x for x in det if x%2==1])
+        if det not in dets and diff<=2 and len(det) == len(dets[0]) and symm and num_odd==no_ref:
+            dets.append(det)
+            new = True
+    return dets, new
+
+def dets_list_order(det, ref):
+    if det == ref:
+        return (0, 0, 0)
+    for orb in ref:
+        if orb not in det:
+            major = orb
+            break
+    count = 0
+    for orb in ref:
+        if orb not in det:
+            count += 1
+    minor = sum(2**d for d in det)
+    return (major, count, minor)
+
+def get_spawns(circ, n_shots=10):
+
+    backend = AerBackend()
+    handle = backend.process_circuit(circ, n_shots = n_shots)
+    counts = backend.get_result(handle).get_counts()
+    return counts.keys()

@@ -37,19 +37,14 @@ def add_controlled_pauli_exp_box(circ, pauli_str, control):
             circ.Vdg(Qubit(qubit))
     return circ
 
-def generate_overlap_measurement_circ(occ1, occ2, nqubits, operators, params):
-    '''Generate overlap measurement circuit between U|D_1> and |D_2>'''
-
+def generate_ucc_state(ref, operators, params, nqubits):
+    
     ucc_circ = ucc_circuit(operators, params, nqubits)
-    measurement = utils.generate_two_det_state(occ1, occ2, nqubits)
-    for qubit in range(nqubits):
-        measurement.CSWAP(0, qubit + 1, nqubits + 1 + qubit)
-    measurement.add_circuit(ucc_circ, [Qubit(x + 1) for x in range(nqubits)])
-    for qubit in range(nqubits):
-        measurement.CSWAP(0, qubit + 1, nqubits + 1 + qubit)
-    measurement.H(Qubit(0))
-    #measurement.to_latex_file('abc.tex')
-    return measurement
+    circ = Circuit(nqubits)
+    for occ in ref:
+        circ.X(occ)
+    circ.add_circuit(ucc_circ, [Qubit(x) for x in range(nqubits)])
+    return circ
 
 def generate_controlled_ucc_circ(nqubits, operators, params):
     circ = Circuit(nqubits + 1)
@@ -58,17 +53,68 @@ def generate_controlled_ucc_circ(nqubits, operators, params):
         circ = add_controlled_pauli_exp_box(circ, string, 0)
     return circ
 
-def generate_controlled_overlap_measurement_circ(occ1, occ2, nqubits, ucc_circ):
+def generate_controlled_overlap_measurement_circ(occ1, occ2, nqubits, ucc_circ, p = False):
     '''Generate overlap measurement circuit between U|D_1> and |D_2>'''
     measurement = Circuit(nqubits + 1, 1)
     measurement.H(0)
+    measurement.X(0)
     for index in occ1:
         measurement.CX(0, index + 1)
+    if p:
+
+        a = measurement.get_statevector()
+        for ai in a:
+            if abs(ai) < 1e-10:
+                ai = 0
+        print('Ref state')
+        for i in range(len(a)):
+            if (abs(a[i]) > 1e-10):
+               print(bin(i), a[i])
     measurement.add_circuit(ucc_circ, measurement.qubits)
+    if p:
+
+        a = measurement.get_statevector()
+        for ai in a:
+            if abs(ai) < 1e-10:
+                ai = 0
+        print('UCC state')
+        for i in range(len(a)):
+            if (abs(a[i]) > 1e-10):
+               print(bin(i), a[i])
     measurement.X(0)
+    if p:
+
+        a = measurement.get_statevector()
+        for ai in a:
+            if abs(ai) < 1e-10:
+                ai = 0
+        print('X UCC state')
+        for i in range(len(a)):
+            if (abs(a[i]) > 1e-10):
+               print(bin(i), a[i])
     for index in occ2:
         measurement.CX(0, index+1)
-    measurement.H(Qubit(0))
+    if p:
+
+        a = measurement.get_statevector()
+        for ai in a:
+            if abs(ai) < 1e-10:
+                ai = 0
+        print('add comp state')
+        for i in range(len(a)):
+            if (abs(a[i]) > 1e-10):
+               print(bin(i), a[i])
+    measurement.H(0)
+    if p:
+
+        a = measurement.get_statevector()
+        for ai in a:
+            if abs(ai) < 1e-10:
+                ai = 0
+        print('Final state')
+        for i in range(len(a)):
+            if (abs(a[i]) > 1e-10):
+               print(bin(i), a[i])
     return measurement
 def measure_hamil_overlap(mcirc, ps_g, nqubits, shots= False, n_shots = 0):
     '''Measure <D2|HU|D1>'''
@@ -102,7 +148,7 @@ def measure_hamil_overlap(mcirc, ps_g, nqubits, shots= False, n_shots = 0):
         backend = AerStateBackend()
         comp_circ = backend.get_compiled_circuit(mcirc)
         for pauli_gr in ps_g:
-            for pauli_str in pauli_gr:
+            for pauli_str in ps_g[pauli_gr]:
                 hamil_elem += pauli_str[1]*backend.get_pauli_expectation_value(comp_circ,
                                                  QubitPauliString([Qubit(x) for x in pauli_str[2]],
                                                  pauli_str[0]))

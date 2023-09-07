@@ -1,5 +1,6 @@
 from openfermion import jordan_wigner
 import utils
+import measurements
 import encode_ucc_wavefunction as euw
 from sympy import Symbol
 import time
@@ -56,7 +57,7 @@ def spawn(apply_mats, ucc_circ2, param_map, dets, nqubits, ref):
     for group, mat in apply_mats.items():
         circ_num = ucc_circ2.copy()
         circ_num.symbol_substitution(param_map)
-        counts = utils.get_counts(np.dot(mat, circ_num.get_statevector()), 10, mapping)
+        counts = measurements.get_counts(np.dot(mat, circ_num.get_statevector()), 10, mapping)
         for count in counts:
             if count not in spawned_dets:
                 spawned_dets.append(count)
@@ -133,6 +134,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, dt, pop_thresh, filename, nsteps 
 
     #Initialise QMC 
     signs = {d:utils.excit_to_det(d,ref) for d in dets}
+    print(signs)
     pops = {d:0 for d in dets[1:]}
     pops[ref] = 1 
     S = 0
@@ -177,10 +179,10 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, dt, pop_thresh, filename, nsteps 
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det, nqubits, current_ucc_circ)
                 if stoch_hamil:
-                    ho = utils.measure_hamil_overlap_groups_matrices(groups_loc, mats, mcirc, mapping, shots)
+                    ho = measurements.measure_hamil_overlap_groups_matrices(groups_loc, mats, mcirc, mapping, shots)
                 else:
-                    ho = utils.measure_hamil_overlap_groups_matrices(groups, mats, mcirc, mapping, shots)
-                overlap = utils.measure_overlap_shots_mat(mcirc, mapping, shots)
+                    ho = measurements.measure_hamil_overlap_groups_matrices(groups, mats, mcirc, mapping, shots)
+                overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, shots)
                 hamil_term = pops[ref]*(ho - (S + hf_e) * overlap)
                 pop_change[det] = -dt* hamil_term*signs[det]
                 if det == ref:
@@ -197,7 +199,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, dt, pop_thresh, filename, nsteps 
         
             if sum([abs(pops[x]) for x in pops]) >= pop_thresh and not vary_shift:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref, nqubits, current_ucc_circ)
-                S = utils.measure_hamil_overlap_groups_matrices(groups, mats, mcirc, mapping, shots)/utils.measure_overlap_shots_mat(mcirc, mapping, shots) - hf_e
+                S = measurements.measure_hamil_overlap_groups_matrices(groups, mats, mcirc, mapping, shots)/measurements.measure_overlap_shots_mat(mcirc, mapping, shots) - hf_e
                 vary_shift = True
                 step_0 = step
                 pop_old = sum([abs(pops[x]) for x in pops])
@@ -235,8 +237,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, dt, pop_thresh, filename, nsteps 
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det, nqubits, current_ucc_circ)
                 if stoch_hamil:
-                    ho = utils.measure_hamil_overlap_groups_matrices(groups_loc, mats, mcirc, mapping, epsilon)
-                    overlap = utils.measure_overlap_shots_mat(mcirc, mapping, epsilon)
+                    ho = measurements.measure_hamil_overlap_groups_matrices(groups_loc, mats, mcirc, mapping, epsilon)
+                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, epsilon)
                     hamil_term = ho - (S + hf_e)*overlap
                 else:
                     hamil_term = np.dot(mcirc.get_statevector(), np.dot(hmat, mcirc.get_statevector())).real + np.random.normal(0, epsilon)
@@ -289,8 +291,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, dt, pop_thresh, filename, nsteps 
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det, nqubits, current_ucc_circ)
                 if stoch_hamil:
-                    ho = utils.measure_hamil_overlap_groups_matrices(groups_loc, mats, mcirc, mapping)
-                    overlap = utils.measure_overlap_shots_mat(mcirc, mapping)
+                    ho = measurements.measure_hamil_overlap_groups_matrices(groups_loc, mats, mcirc, mapping)
+                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
                     hamil_term = ho - (S + hf_e)*overlap
                 else:
                     hamil_term = (mcirc.get_statevector()).dot(hmat.dot((mcirc.get_statevector()))).real

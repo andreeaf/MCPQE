@@ -1,5 +1,8 @@
-import ../utils
-import ../encode_ucc_wavefunction as euw
+import sym
+sym.path.append('../')
+
+import utils
+import encode_ucc_wavefunction as euw
 
 from sympy import Symbol
 import numpy as np

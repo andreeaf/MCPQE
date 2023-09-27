@@ -1,0 +1,14 @@
+ sys = read_in {
+     int_file = "FCIDUMP.H3.sto-3g-1.0",
+     sym = 5,
+ }
+ 
+ 
+ fci {
+     sys = sys,
+     fci = {
+         write_hamiltonian = true,
+         write_determinants = true,
+         write_nwfns = 5,
+     }
+     }

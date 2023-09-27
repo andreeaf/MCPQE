@@ -1,0 +1,30 @@
+
+ sys = read_in {
+     int_file = "FCIDUMP.H3+.STO-3g",
+     sym = 0,
+ }
+ 
+ 
+ uccmc {
+     sys = sys,
+     qmc = {
+     tau = 0.05,
+     init_pop = 200,
+     target_population = 500,
+     nreports = 1000,
+     mc_cycles = 20,
+     state_size = -4000,
+     spawned_state_size = -4000,         
+
+     },
+     reference = {
+        ex_level = 2,
+     },
+     uccmc = {
+        trotterized = true,
+        average_wfn = true,
+     },
+     ccmc = {
+        full_non_composite = true,
+     }
+    }

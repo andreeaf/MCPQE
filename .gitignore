@@ -1,4 +1,3 @@
-deterministic_wfn_propagator_tucc/*
 *.out
 quantum_circuits/__pycache__/*
 *.aux

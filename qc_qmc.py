@@ -11,6 +11,7 @@ import measurements
 import encode_ucc_wavefunction as euw
 import stoch_gates
 import hamil
+from pytket.circuit import OpType
 
 def get_stoch_wfn(pops, params, dets, ref, noise_symbols = None, prob = None, gamma = None):
 
@@ -101,9 +102,28 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     qubit_h = jordan_wigner(ferm_hamil)
     ps_h = hamil.get_hamil_pauli_strings(qubit_h)
     groups = utils.group_pauli_strings(ps_h)
+    dets.sort(key = lambda x: utils.dets_list_order(x, ref))
+    operators = utils.generate_excitation_operators(dets[1:], ref, nqubits)
+    qubit_ops = {op:jordan_wigner(operators[op]) for op in operators}
+    params = {d:Symbol('t'+str(utils.bits_shared_ref(d,ref,nqubits))+'_'+
+                str(utils.bits_not_shared_ref(d,ref,nqubits))) for d in dets[1:]}
+    ucc_circ = euw.generate_controlled_ucc_circ(nqubits, qubit_ops, params)
+
+    print(len(groups))
+    pops = {d:0 for d in dets[1:]}
+    pops[ref] = 1
+    param_map = {params[d]: pops[d]/pops[ref] for d in params}
+    current_ucc_circ = ucc_circ.copy()
+    current_ucc_circ.symbol_substitution(param_map)
+    det = dets[1]
+    mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                                                                    nqubits, current_ucc_circ)
+    print('N2', mcirc.n_2qb_gates())
+    exit()
     if hmat is None or zmat is None or mats is None:
-        hmat, zmat = hamil.get_hamil_and_overlap_matrix(ps_h, nqubits, 'test')
+        #hmat, zmat = hamil.get_hamil_and_overlap_matrix(ps_h, nqubits, 'test')
         mats = hamil.get_hamil_group_matrices(groups, nqubits, 'test')
+    print('groups', len(groups))
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:
@@ -142,6 +162,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         spawned_dets = []
 
     #Initialise QMC
+    print(dets)
     signs = {d:utils.excit_to_det(d,ref) for d in dets}
     print(signs)
     pops = {d:0 for d in dets[1:]}
@@ -151,6 +172,15 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     pop_old = 1
     vary_shift = False
 
+    trial_wfn = {ref:1.0}#, (2,3): -0.5, (4,5):-0.35}
+    #dets_trial = {(2,3), (4,5)}
+    #Generate excitation operators corresponding to trial determinants
+    #operators_trial = utils.generate_excitation_operators(dets_trial, ref, nqubits)
+    #qubit_ops_trial = {op:jordan_wigner(operators[op]) for op in operators_trial}
+    #params_trial = {d: trial_wfn[d] for d in dets_trial}
+    #ucc_circ_trial = euw.generate_controlled_ucc_circ(nqubits, qubit_ops_trial, params_trial)
+
+    
     #Open output file
     output_file = open(filename, 'w', encoding="utf-8")
     print('Starting QMC \n')
@@ -164,6 +194,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         sys.exit()
     if shots and not gaussian_noise:
         for step in range(nsteps+1):
+            e_proj = 0
+            ov_proj = 0
             if stoch_wfn and (depolarising_noise or damping_noise):
                 param_map = get_stoch_wfn(pops, params, dets, ref,
                                           noise_symbols, noise_prob, damp_prob)
@@ -195,9 +227,22 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                                     mcirc, mapping, shots)
                 overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, shots)
                 hamil_term = pops[ref]*(hamil_overlap - (shift + hf_e) * overlap)
-                pop_change[det] = -time_step* hamil_term*signs[det]
                 if det == ref:
-                    e_proj = hamil_overlap/overlap - hf_e
+                    e_proj = (hamil_overlap/overlap - hf_e)
+                pop_change[det] = -time_step* hamil_term*signs[det]
+                #if det in trial_wfn:
+                #    e_proj += trial_wfn[det]*hamil_overlap
+                #    ov_proj+= trial_wfn[det]*overlap
+
+            #if step == 0:
+                #hf_e = e_proj/ov_proj
+            #print(hf_e)
+            #e_proj = e_proj/ov_proj - hf_e
+            #mcirc_trial = euw.generate_controlled_overlap_measurement_circ_trial(ref, ref,
+            #                                                        nqubits, current_ucc_circ, ucc_circ_trial)
+            #hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups, mats,
+            #                                                        mcirc_trial, mapping, shots)
+            #overlap = measurements.measure_overlap_shots_mat(mcirc_trial, mapping, shots)
 
             for det in dets:
                 pops[det] += pop_change[det]
@@ -224,11 +269,10 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 output_file.write(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+
                         str(pops[ref])+'    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
                         str({x:pops[x]/pops[ref] for x in pops})+'\n')
+            if step%1 == 0:
                 print(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+str(pops[ref])+
                         '    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
                         str({x:pops[x]/pops[ref] for x in pops})+'\n')
-            if step%50 == 0:
-                print(step)
             time2 = time.time()
         output_file.write('Elapsed time: '+str(time2-time1)+ ' seconds')
         output_file.close()
@@ -259,24 +303,32 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                         nqubits, current_ucc_circ)
+                print('N1', current_ucc_circ.n_2qb_gates(), len(current_ucc_circ.commands_of_type(OpType.CX)), len(current_ucc_circ.commands_of_type(OpType.CRz)))
+                print('N2', mcirc.n_2qb_gates())
                 if stoch_hamil:
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups_loc,
                                                          mats, mcirc, mapping, shots, gaussian_noise)
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, shots, gaussian_noise)
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap
                 else:
-                    hamil_term = mcirc.get_statevector().dot(hmat.dot(
-                                mcirc.get_statevector())).real + np.random.normal(0, epsilon)
-                    hamil_term -= (shift + hf_e) * (mcirc.get_statevector().dot(
-                                zmat.dot(mcirc.get_statevector().T)).real +
-                                np.random.normal(0,epsilon))
+                    hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
+                                                         mats, mcirc, mapping, shots, gaussian_noise)
+                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, shots, gaussian_noise)
+                    hamil_term = hamil_overlap - (shift + hf_e)*overlap
+
+#                    hamil_term = mcirc.get_statevector().dot(hmat.dot(
+#                                mcirc.get_statevector())).real + np.random.normal(0, epsilon)
+#                    hamil_term -= (shift + hf_e) * (mcirc.get_statevector().dot(
+#                                zmat.dot(mcirc.get_statevector().T)).real +
+ #                               np.random.normal(0,epsilon))
 
                 if det == ref:
-                    e_proj = (mcirc.get_statevector().dot(hmat.dot(
-                                mcirc.get_statevector().T)).real +
-                                np.random.normal(0,epsilon))/(mcirc.get_statevector().dot(
-                                zmat.dot(mcirc.get_statevector().T)).real +
-                                np.random.normal(0,epsilon)) - hf_e
+                     e_proj = hamil_overlap/overlap - hf_e
+ #                   e_proj = (mcirc.get_statevector().dot(hmat.dot(
+ #                               mcirc.get_statevector().T)).real +
+ #                              np.random.normal(0,epsilon))/(mcirc.get_statevector().dot(
+ #                               zmat.dot(mcirc.get_statevector().T)).real +
+ #                               np.random.normal(0,epsilon)) - hf_e
                 pop_change[det] = -time_step * pops[ref]*hamil_term*signs[det]
 
             for det in dets:
@@ -294,10 +346,10 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 step_0 = step
                 pop_old = sum(abs(pops[x]) for x in pops)
 
-            if step%1 == 0:
-                output_file.write(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+
+            output_file.write(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+
                         str(pops[ref])+'    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
                         str({x:pops[x]/pops[ref] for x in pops})+'\n')
+            if step%10 == 0:
                 print(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+str(pops[ref])+
                         '    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
                         str({x:pops[x]/pops[ref] for x in pops})+'\n')
@@ -335,16 +387,26 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap
                 else:
-                    hamil_term = (mcirc.get_statevector()).dot(hmat.dot(
-                                                       (mcirc.get_statevector()))).real
-                    hamil_term -= (shift + hf_e) * (mcirc.get_statevector()).dot(zmat.dot(
-                                                        (mcirc.get_statevector()))).real
+#                    hamil_term = (mcirc.get_statevector()).dot(hmat.dot(
+#                                                       (mcirc.get_statevector()))).real
+#                    hamil_term -= (shift + hf_e) * (mcirc.get_statevector()).dot(zmat.dot(
+#                                                        (mcirc.get_statevector()))).real
 
+                    hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
+                                                                  mats, mcirc, mapping)
+                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
+                    hamil_term = hamil_overlap - (shift + hf_e)*overlap
                 if det == ref:
-                    e_proj = (mcirc.get_statevector()).dot(hmat.dot(
-                                (mcirc.get_statevector()))).real/(mcirc.get_statevector()).dot(
-                                zmat.dot((mcirc.get_statevector()))).real - hf_e
+                     e_proj = hamil_overlap/overlap - hf_e
+#                    e_proj = (mcirc.get_statevector()).dot(hmat.dot(
+#                                (mcirc.get_statevector()))).real/(mcirc.get_statevector()).dot(
+ #                               zmat.dot((mcirc.get_statevector()))).real - hf_e
                 pop_change[det] = -time_step * pops[ref]*hamil_term*signs[det]
+            #mcirc_trial = euw.generate_controlled_overlap_measurement_circ_trial(ref, ref,
+            #                                                        nqubits, current_ucc_circ, ucc_circ_trial)
+            #e_proj = (mcirc_trial.get_statevector()).dot(hmat.dot(
+            #                    (mcirc_trial.get_statevector()))).real/(mcirc_trial.get_statevector()).dot(
+            #                    zmat.dot((mcirc_trial.get_statevector()))).real - hf_e
             for det in dets:
                 pops[det] += pop_change[det]
             if vary_shift and (step - step_0) % 5 == 0:
@@ -355,13 +417,14 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref,
                                                         nqubits, current_ucc_circ)
-                shift = (mcirc.get_statevector()).dot(hmat.dot((mcirc.get_statevector()))).real/(
-                    mcirc.get_statevector()).dot(zmat.dot((mcirc.get_statevector()))).real - hf_e
+                shift = hamil_overlap/overlap - hf_e
+                #shift = (mcirc.get_statevector()).dot(hmat.dot((mcirc.get_statevector()))).real/(
+                #    mcirc.get_statevector()).dot(zmat.dot((mcirc.get_statevector()))).real - hf_e
                 vary_shift = True
                 step_0 = step
                 pop_old = sum(abs(pops[x]) for x in pops)
 
-            if step%1 == 0:
+            if step%5 == 0:
                 output_file.write(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+
                         str(pops[ref])+'    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
                         str({x:pops[x]/pops[ref] for x in pops})+'\n')

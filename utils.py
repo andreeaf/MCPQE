@@ -40,7 +40,7 @@ def excit_to_det(occ_det: List[int], occ_ref:List[int]):
     ''' Find the sign s in a_ij...^ab... |D_0> = s |D_ij...^ab...>.'''
     det = sum(2**i for i in occ_det)
     ref = sum(2**i for i in occ_ref)
-    excit = det^ref
+    excit = int(det^ref)
     excit_level = count_set_bits(excit)/2
     nannih = excit_level
     ncreate = excit_level

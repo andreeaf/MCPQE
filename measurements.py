@@ -1,3 +1,4 @@
+import bisect
 import numpy as np
 from pytket.extensions.qiskit import AerBackend, AerStateBackend
 
@@ -63,7 +64,9 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
     hamil_elem = 0
     for pauli_group, mat in mats.items():
         if pauli_group in ps_g:
-            vector = mat.dot(mcirc.get_statevector())
+            circ = mcirc.copy()
+            circ.append(mat)
+            vector = circ.get_statevector()
             counts = get_counts(vector, nshots, mapping, gaussian)
             for pauli_str in ps_g[pauli_group]:
                 avg = 0
@@ -102,32 +105,27 @@ def measure_overlap_shots_mat(mcirc, mapping, nshots = 0, gaussian = False):
     return overlap
 
 def get_counts(vector, nshots, mapping, gaussian = False):
-    vector_square = np.conj(vector) * vector
-    distribution = np.zeros(len(vector))
-    probability = np.zeros(len(vector))
+    vector_square = np.conj(vector)*vector
+    indices = []
+    distribution = []
     prob = 0
     for i in range(len(vector_square)):
         if vector_square[i] > 1e-9:
-            probability[i] = vector_square[i]
             prob += vector_square[i]
-            distribution[i] = prob
-            last_dist = i
-    distribution[:]/=distribution[last_dist]
+            indices.append(i)
+            distribution.append(prob)
+    distribution[:]/=distribution[-1]
     if nshots == 0 or gaussian:
-        counts = {mapping[a]:probability[a] for a in mapping}
+        counts = {mapping[a]:vector_square[a].real for a in mapping}
         return counts
     counts = {}
     rands = np.random.rand(nshots)
-    length = len(distribution)
-    rang = range(length)
     for rand in rands:
-        for j in rang:
-            if rand < distribution[j]:
-                if mapping[j] in counts:
-                    counts[mapping[j]] +=1
-                else:
-                    counts[mapping[j]] =1
-                break
+        j = bisect.bisect_left(distribution, rand)
+        if mapping[indices[j]] in counts:
+            counts[mapping[indices[j]]] +=1
+        else:
+            counts[mapping[indices[j]]] =1
     return counts
 
 def measure_hamil_overlap(mcirc, ps_g, nqubits, shots= False, n_shots = 0):

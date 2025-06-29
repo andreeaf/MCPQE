@@ -83,3 +83,18 @@ def generate_controlled_overlap_measurement_circ(occ1, occ2, nqubits, ucc_circ):
         measurement.CX(0, index+1)
     measurement.H(0)
     return measurement
+
+def generate_controlled_overlap_measurement_circ_trial(occ1, occ2, nqubits, ucc_circ, ucc_circ2):
+    '''Generate overlap measurement circuit between U|D_1> and |D_2>'''
+    measurement = Circuit(nqubits + 1, 1)
+    measurement.H(0)
+    measurement.X(0)
+    for index in occ1:
+        measurement.CX(0, index + 1)
+    measurement.add_circuit(ucc_circ, measurement.qubits)
+    measurement.X(0)
+    for index in occ2:
+        measurement.CX(0, index+1)
+    measurement.add_circuit(ucc_circ2, measurement.qubits)
+    measurement.H(0)
+    return measurement

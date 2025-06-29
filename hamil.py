@@ -13,6 +13,19 @@ from scipy.sparse import csr_matrix, save_npz
 
 import utils
 
+def get_qubit_hubbard_hamiltonian(nsites, J, U):
+    ''' Function to generate a qubit hamiltonian from a molecular input, using OpenFermion.
+    IN:
+        geometry: List of atoms and coordinates.
+        basis: Basis set.
+        multiplicity: 2S+1.
+        charge: molecular charge.
+    Returns:
+        qubit_h: OpenFermion QubitOperator corresponding to the molecular hamiltonian.'''
+
+    hubbard = fermi_hubbard(1, nsites, tunneling=-J, coulomb=U, periodic=False)
+    qubit_h = jordan_wigner(hubbard)
+    return qubit_h
 
 def get_qubit_molecular_hamiltonian(geometry: list[str, list[int]],
                                     basis: str,
@@ -123,7 +136,7 @@ def get_hamil_matrix(hamil_pauli_strings:dict, nqubits:int):
     return hmats
 
 
-def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str):
+def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str = None):
     ''' Function to generate Hamiltonian matrices for each commuting Pauli group
         for a Hadamard-test-type measurement circuit with 1 ancilla. To measure
         <Psi_k|O|Psi_l> the Paulis corresponding to O must be applied to the
@@ -138,7 +151,7 @@ def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str):
                 measurement_circ.H(pauli_gr[1][index])
             if pauli_gr[0][index] == Pauli.Y:
                 measurement_circ.V(pauli_gr[1][index])
-        mats[pauli_gr] = csr_matrix(measurement_circ.get_unitary())
-    with open(filename, 'wb') as matrix_file:
-        pickle.dump(mats, matrix_file)
+        mats[pauli_gr] = measurement_circ#csr_matrix(measurement_circ.get_unitary())
+    #with open(filename, 'wb') as matrix_file:
+    #    pickle.dump(mats, matrix_file)
     return mats

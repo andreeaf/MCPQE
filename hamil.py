@@ -31,7 +31,8 @@ def get_qubit_molecular_hamiltonian(geometry: list[str, list[int]],
                                     basis: str,
                                     multiplicity: int,
                                     charge: int,
-                                    ncore: int = 0):
+                                    ncore: int = 0,
+                                    filename: str = None):
     ''' Function to generate a qubit hamiltonian from a molecular input, using OpenFermion.
     IN:
         geometry: List of atoms and coordinates.
@@ -52,8 +53,10 @@ def get_qubit_molecular_hamiltonian(geometry: list[str, list[int]],
     else:
         qubit_h = jordan_wigner(get_fermion_operator(molecule.get_molecular_hamiltonian()))
 
-    print('FCI Energy: ', molecule.fci_energy)
-    print('HF Energy: ', molecule.hf_energy)
+    if filename is not None:
+        f = open(filename, 'w', encoding="utf-8")
+        f.write('FCI Energy: ' + str(molecule.fci_energy)+'\n')
+        f.write('HF Energy: ' + str(molecule.hf_energy)+'\n')
     return molecule.hf_energy, molecule.fci_energy, qubit_h
 
 def get_qubit_molecular_hamiltonian_squared(geometry: list[str, list[int]],

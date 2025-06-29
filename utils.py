@@ -236,3 +236,13 @@ def get_spawns(circ, n_shots=10):
     handle = backend.process_circuit(circ, n_shots = n_shots)
     counts = backend.get_result(handle).get_counts()
     return counts.keys()
+
+def get_molecular_geometry(xyzfile):
+    geometry = []
+
+    with open(xyzfile, 'r') as f:
+        lines = f.readlines()
+        for line in lines[2:]:
+            a = line.strip().split(' ')
+            geometry.append((a[0], (float(a[1]), float(a[2]),float(a[3])))) 
+    return geometry

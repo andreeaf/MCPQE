@@ -233,8 +233,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
     
     #Open output file
-    output_file = open(filename, 'w', encoding="utf-8")
-    print('Starting QMC \n')
+    output_file = open(filename, 'a', encoding="utf-8")
+    output_file.write('Starting QMC \n')
     output_file.write('step      S         E_proj        N0         N_tot       Ni/N0\n')
     e_proj = 0
 

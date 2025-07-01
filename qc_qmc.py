@@ -367,8 +367,6 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
             #Compute shift the first time population crosses threshold.
             if sum(abs(pops[x]) for x in pops) >= pop_thresh and not vary_shift:
 
-                mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref,
-                                                        nqubits, current_ucc_circ)
                 shift = e_proj
                 vary_shift = True
                 step_0 = step
@@ -428,9 +426,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
             #Compute shift the first time population crosses threshold.
             if sum(abs(pops[x]) for x in pops) >= pop_thresh and not vary_shift:
 
-                mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref,
-                                                        nqubits, current_ucc_circ)
-                shift = hamil_overlap/overlap - hf_e
+                shift = e_proj
                 vary_shift = True
                 step_0 = step
                 pop_old = sum(abs(pops[x]) for x in pops)

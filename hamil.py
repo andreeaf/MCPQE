@@ -9,7 +9,7 @@ from openfermion import QubitOperator, FermionOperator
 from openfermionpyscf import run_pyscf
 from pytket.circuit import Circuit
 from pytket.pauli import Pauli
-from scipy.sparse import csr_matrix, save_npz
+from scipy.sparse import csr_array, save_npz
 
 import utils
 
@@ -154,7 +154,8 @@ def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str = None):
                 measurement_circ.H(pauli_gr[1][index])
             if pauli_gr[0][index] == Pauli.Y:
                 measurement_circ.V(pauli_gr[1][index])
-        mats[pauli_gr] = measurement_circ#csr_matrix(measurement_circ.get_unitary())
+        mats[pauli_gr] = csr_array(measurement_circ.get_unitary())
+    #TODO swap between circ and unitary if it gets too big. Redo saving.
     #with open(filename, 'wb') as matrix_file:
     #    pickle.dump(mats, matrix_file)
     return mats

@@ -251,25 +251,35 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
         print(x_rearr, "\n")
     gates_to_apply.append({'H': rows_not_rearr})
 
+    # Refind and reswap pivot rows to get fullrank upper submatrix
+    rows_rearr_post_h = np.array(extract_pivot_cols(x_rearr.T, binary_gauss_elim(x_rearr.T))[1], dtype=int)
+    rows_not_rearr_post_h = np.setdiff1d(all_rows, rows_rearr_post_h).astype(int)
+    z_re_rearr = GF(np.array(z_rearr[np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))]).astype(int))
+    x_re_rearr = GF(np.array(x_rearr[np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))]).astype(int))
+    if verbose:
+        print("S_1 after post-Hadamard rearrangement")
+        print(z_re_rearr)
+        print(x_re_rearr, "\n")
+
     # Invert upper (k,k) submatrix of X submatrix, multiply by current
-    x_upper_submat = x_rearr[0:start_rank]
-    R1 = np.linalg.inv(x_upper_submat)  # x_upper_submat should be fullrank (BUT IS NOT SOMETIMES)
-    z_submat = z_rearr @ R1
-    x_submat = x_rearr @ R1
+    x_upper_submat = x_re_rearr[0:start_rank]
+    R1 = np.linalg.inv(x_upper_submat)  # x_upper_submat should be fullrank
+    z_new_submat = z_re_rearr @ R1
+    x_new_submat = x_re_rearr @ R1
     if verbose:
         print("R_1")
         print(R1, "\n")
         print("S_2")
-        print(z_submat)
-        print(x_submat, "\n")
+        print(z_new_submat)
+        print(x_new_submat, "\n")
 
     # Append columns to complete the basis
-    x_top = np.hstack((x_submat.copy()[0:start_rank], np.zeros((start_rank, n - start_rank))))
-    x_bottom = np.hstack((x_submat.copy()[start_rank:], np.eye(n - start_rank)))
+    x_top = np.hstack((x_new_submat.copy()[0:start_rank], np.zeros((start_rank, n - start_rank))))
+    x_bottom = np.hstack((x_new_submat.copy()[start_rank:], np.eye(n - start_rank)))
     x_res = np.vstack((x_top, x_bottom))
     
-    D = z_submat.copy()[start_rank:]
-    z_top = np.hstack((z_submat.copy()[0:start_rank], D.T))
+    D = z_new_submat.copy()[start_rank:]
+    z_top = np.hstack((z_new_submat.copy()[0:start_rank], D.T))
     z_bottom = np.hstack((D, np.zeros((n - start_rank, n - start_rank))))
     z_res = np.vstack((z_top, z_bottom))
     if verbose:
@@ -305,7 +315,7 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
         print(S3R3, "\n")
         print("R")
         print(R, "\n")
-
+        
     cZ_gates = []  # qubit pairs on which to apply cZ
     for graph_row in range(1,n):
         for graph_col in range(graph_row):

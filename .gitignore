@@ -9,3 +9,5 @@ quantum_circuits/__pycache__/*
 *pylint.txt
 *.dat
 *.npz
+quantum_venv/
+__pycache__/

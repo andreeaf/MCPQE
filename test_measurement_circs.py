@@ -1,99 +1,11 @@
-import hamil
-import utils
-import encode_ucc_wavefunction as euw
-
-from openfermion import MolecularData, jordan_wigner, get_fermion_operator, QubitOperator, FermionOperator, normal_ordered
-from openfermionpyscf import run_pyscf
-from scipy.sparse import csr_matrix
 import numpy as np
-import cProfile
-import pstats
-import time
-from sympy import Symbol
-import qc_qmc
-import numpy as np
-import cProfile
-import pstats
-import pickle
 import galois
+from openfermion import QubitOperator
 
-from argparse import ArgumentParser
-parser = ArgumentParser()
+# --- Measurement circuit generation for a collection of commuting Paulis ---
 
-# Get geometry etc data
-parser.add_argument("-xyz", "--xyzfile", dest = "xyzfile",
-                    help="Molecule .xyz file")
-parser.add_argument("-b", "--basis", dest="basis", default='sto-3g', type=str,
-                    help="Basis set")
-parser.add_argument("-c", "--charge", dest = "charge", default=0, type=int,
-                    help="Molecular charge")
-parser.add_argument("-m", "--multiplicity", dest = "multiplicity", default=1, type=int,
-                    help="Multiplicity")
-parser.add_argument("-q", "--nqubits", dest = "nqubits", type=int,
-                    help="Number of qubits (should be 2*number of basis states")
-parser.add_argument("-e", "--nelectrons", dest = "nelec", type=int,
-                    help="Number of electrons (should match charge and multiplicity")
-parser.add_argument("-dt", dest="dt", default=0.1, type=float,
-                    help="QMC time step")
-parser.add_argument("-p", "--pop_threshold", dest="pop_thresh", default=2, type=int,
-                    help="Population threshold")
-parser.add_argument("-ref", "--reference", dest="ref", type=str, default =None,
-                    help="Reference determinant")
-parser.add_argument("-dets", "--det_list", dest="dets", type=str, 
-                    help="Determinant list file")
-parser.add_argument("-shots", dest="nshots", default=0, type=int,
-                    help="Number of shots. Default is statevector.")
-parser.add_argument("-steps", dest="nsteps", default=1000, type=int,
-                    help="Number of QMC steps.")
-parser.add_argument("--gaussian", dest="gaussian_noise", action='store_true',
-                    help = "Whether to use gaussian noise instead of true shots.")
-parser.add_argument("--stoch_hamil", dest="stoch_hamil", action='store_true',
-                    help = "Whether to sample the hamiltonian.")
-parser.add_argument('-nattempts', dest='nattempts', default=1, type=int,
-                    help = "Number of hamiltonian terms to sample beyond diagonal.")
-args, unknown_args = parser.parse_known_args()
-
-geometry = utils.get_molecular_geometry(args.xyzfile) 
-molecule = MolecularData(geometry, args.basis, args.multiplicity, args.charge)
-molecule = run_pyscf(molecule, run_scf=1, run_fci=1)
-    
-ferm_h = normal_ordered(get_fermion_operator(molecule.get_molecular_hamiltonian()))#occupied_indices = [0], active_indices = [1,2,3,4,5,6])))
-
-# Testing grouping methods
-# 1. Sorted Insertion
-
-def sorted_insertion(fermion_hamil: FermionOperator):
-    '''Run sorted insertion on given Hamiltonian.
-
-    Args:
-        fermion_hamil: fermionic Hamiltonian operator
-
-    Returns:
-        collections_pauli_strings: list of collections of mutually commuting Pauli strings
-    '''
-    pauli_hamil = jordan_wigner(fermion_hamil)
-    pauli_hamil.compress()
-    pauli_hamil_arr = list(pauli_hamil.get_operators())
-
-    # Sort Pauli strings by absolute value of coefficients
-    sorted_pauli = sorted(
-        pauli_hamil_arr,
-        key=lambda x: np.abs(list(x.terms.values())[0]),  # x.terms converts QubitOperator to {Pauli string: coefficient}
-        reverse=True
-    )
-
-    collections_pauli_strings = [] 
-    for pauli_string in sorted_pauli:
-        for coll in collections_pauli_strings:
-            if all(pauli_string * ps == ps * pauli_string for ps in coll):
-                coll.append(pauli_string)
-                break
-        else:
-            collections_pauli_strings.append([pauli_string])
-
-    return collections_pauli_strings
-
-def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]):
+# 1. (Sorted Insertion paper method)
+def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]) -> tuple[np.ndarray, list[float]]:
     '''Maps list of Pauli strings to binary matrix representation
 
     Args:
@@ -122,10 +34,10 @@ def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]):
                         bin_matrix[act_qubit+num_q, idx] = 1
         coeffs.append(list(pauli_string.terms.values())[0])
 
-    return bin_matrix, coeffs
+    return (bin_matrix, coeffs)
 
 
-def binary_gauss_elim(bin_matrix: np.ndarray):
+def binary_gauss_elim(bin_matrix: np.ndarray) -> np.ndarray:
     '''Gaussian elimination on binary matrix
     
     Args:
@@ -155,7 +67,7 @@ def binary_gauss_elim(bin_matrix: np.ndarray):
     return mat
 
 
-def extract_pivot_cols(bin_matrix: np.ndarray, gauss_elim_matrix: np.ndarray):
+def extract_pivot_cols(bin_matrix: np.ndarray, gauss_elim_matrix: np.ndarray) -> tuple[np.ndarray, list[int]]:
     '''Extracts a linearly independent set of columns of a binary matrix by finding pivot columns (with only one 1) in Gaussian eliminated matrix
     
     Args:
@@ -177,10 +89,10 @@ def extract_pivot_cols(bin_matrix: np.ndarray, gauss_elim_matrix: np.ndarray):
             one_rows.append(nonzero_idxs[0])
     pivot_only_mat = bin_matrix[:, pivot_cols]
 
-    return pivot_only_mat, pivot_cols
+    return (pivot_only_mat, pivot_cols)
 
 
-def rank(bin_matrix: np.ndarray):
+def rank(bin_matrix: np.ndarray) -> int:
     '''Rank of a binary matrix
     
     Args:
@@ -198,7 +110,7 @@ def rank(bin_matrix: np.ndarray):
     return rank
 
 
-def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False):
+def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False) -> tuple[np.ndarray, dict[str, list[int | tuple[int, int]]]]:
     '''Full cZ measurement circuit
     
     Args:
@@ -212,7 +124,7 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
     gates_to_apply = []
     GF = galois.GF(2)  # easy usage of numpy for binary matrices
 
-    bin_matrix = operator_binary_mapping(num_q, pauli_strings)[0]
+    bin_matrix, coeffs = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
         print("S'_start")
         print(bin_matrix, "\n")
@@ -327,4 +239,4 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
         print("GATES TO APPLY")
         print(gates_to_apply, "\n")
 
-    return R, gates_to_apply
+    return (np.array(R), gates_to_apply)

@@ -80,7 +80,7 @@ def sorted_insertion(hamil: FermionOperator) -> list[list[QubitOperator]]:
 
 
 # 1.5 Iterative Coefficient Splitting (extension to Sorted Insertion)
-def add_backwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple[list[list[QubitOperator]], dict[tuple, list], list[list[float]]]:
+def add_forwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple[list[list[QubitOperator]], dict[tuple, list], list[list[float]]]:
     '''Adds all backwards compatible Pauli strings to sorted insertion collections, splits coefficients evenly, ignores strings with zero variance
     
     Args:
@@ -94,24 +94,26 @@ def add_backwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple
     coll_list = sorted_insertion(hamil)  # function below mutates this directly
     collections_list = copy.deepcopy(coll_list)
     gs_vec = ground_state(hamil, num_q)[0]
-    VAR_TOL = 1E-5  # tolerance below whch variance is treated as zero
+    VAR_TOL = 1E-8  # tolerance below whch variance is treated as zero
 
-    # adding all backwards compatible Pauli strings to collection (those not checked in sorted_insertion), splitting coefficients evenly
+    # adding all forwards compatible Pauli strings to collection (those not checked in sorted_insertion), splitting coefficients evenly
     checked_ops = set()
     ops_locations = {}  # location of operators
     last_coll_idx = len(collections_list) - 1
-    last_coll_locs = {}  # last collection is not accessed below, get its strings' location data now
+    last_coll_locs = {}  # to avoid iterating over all collections again
     for last_coll_op_idx, last_coll_op in enumerate(collections_list[-1]):
         last_coll_locs[list(last_coll_op.terms.keys())[0]] = [(last_coll_idx, last_coll_op_idx)]
 
     for current_coll_idx, current_coll in enumerate(collections_list[:-1]):  # current collection being checked
-        current_coll_coeffs = []
         for current_op_idx, current_op in enumerate(current_coll):  # current operator in current collection being checked
-            if paulis_covariance(current_op, current_op, gs_vec, num_q) > VAR_TOL * (list(current_op.terms.values())[0]) ** 2:  # only take those strings with nonzero variance up to tolerance
+            current_op_var = paulis_covariance(current_op, current_op, gs_vec, num_q)
+            threshold_var = VAR_TOL * (list(current_op.terms.values())[0]) ** 2
+            
+            if current_op_var >= threshold_var:  # only take those strings with nonzero variance up to tolerance
                 current_op_key = list(current_op.terms.keys())[0]  # Pauli string only without coefficient
-                op_locs = [(current_coll_idx, current_op_idx)]
-
+            
                 if current_op_key not in checked_ops:  # have not checked current operator yet
+                    op_locs = [(current_coll_idx, current_op_idx)]
                     repeat_idxs = []  # collection indices to add current operator to
                     for check_coll_idx, coll_to_check in enumerate(collections_list[current_coll_idx+1:]):  
                         if all(current_op * ps == ps * current_op for ps in coll_to_check):
@@ -125,11 +127,17 @@ def add_backwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple
                         for repeat_idx in repeat_idxs:
                             collections_list[repeat_idx].append(split_op)
 
-                current_coll_coeffs.append(current_op.terms[current_op_key])
+                    ops_locations[current_op_key] = op_locs
                 checked_ops.add(current_op_key)  # avoid checking same operator multiple times
-                ops_locations[current_op_key] = op_locs
-        
-    ops_locations_dict = ops_locations | last_coll_locs
+
+    ops_locations_dict = ops_locations.copy()
+    for op_key, loc in last_coll_locs.items(): 
+        if op_key in ops_locations_dict.keys():
+            new_loc = copy.deepcopy(ops_locations_dict[op_key])
+            new_loc.extend(loc)
+            ops_locations_dict[op_key] = new_loc
+        else:
+            ops_locations_dict[op_key] = loc.copy()
     coeffs_matrix = [[list(op.terms.values())[0] for op in coll] for coll in collections_list]
 
     return collections_list, ops_locations_dict, coeffs_matrix
@@ -147,7 +155,7 @@ def iterative_coefficient_splitting(molecule: str, num_iter: int) -> tuple[list[
     data = get_molecular_data()
     hamil, _, num_q, _ = data[molecule]
     
-    collections_list, ops_locations, coeffs_matrix = add_backwards_compatible_paulis(hamil, num_q)
+    collections_list, ops_locations, coeffs_matrix = add_forwards_compatible_paulis(hamil, num_q)
     all_coeffs_matrices = []  # list over iterations of coefficient matrices
     all_coeffs_matrices.append(coeffs_matrix)
 
@@ -229,16 +237,16 @@ def iterative_coefficient_splitting(molecule: str, num_iter: int) -> tuple[list[
         new_colls_sum_stdevs, new_colls_vars = collection_vars_ref_state(new_collections_list, num_q, ref_state=gs_vec)  # sum over collections of collection standard deviations, list of collection variances
         dvar = np.sum([new_colls_var / measurement_nums[mu] for mu, new_colls_var in enumerate(new_colls_vars)])
 
-        # 1. Minimise total number of measurements with dvar constrained
-        for mu in range(len(measurement_nums)):
-            new_measurement_nums[mu] = np.sqrt(new_colls_vars[mu]) * new_colls_sum_stdevs / dvar  # try not rounding up to integer at each iteration
+        # # 1. Minimise total number of measurements with dvar constrained
+        # for mu in range(len(measurement_nums)):
+        #     new_measurement_nums[mu] = np.sqrt(new_colls_vars[mu]) * new_colls_sum_stdevs / dvar  # try not rounding up to integer at each iteration
 
         # 2. Minimise dvar with total number of measurements constrained
-        # ref_msmt_coll_idx = np.argmax(new_colls_vars)
-        # ref_msmt = measurement_nums[ref_msmt_coll_idx]
-        # ref_new_coll_var = new_colls_vars[ref_msmt_coll_idx]
-        # for mu in range(len(measurement_nums)):
-        #     new_measurement_nums[mu] = np.ceil(ref_msmt * np.sqrt(new_colls_vars[mu] / ref_new_coll_var))
+        ref_msmt_coll_idx = np.argmax(new_colls_vars)
+        ref_msmt = measurement_nums[ref_msmt_coll_idx]
+        ref_new_coll_var = new_colls_vars[ref_msmt_coll_idx]
+        for mu in range(len(measurement_nums)):
+            new_measurement_nums[mu] = ref_msmt * np.sqrt(new_colls_vars[mu] / ref_new_coll_var)
 
         all_msmt_lists.append(new_measurement_nums)
         measurement_nums = new_measurement_nums

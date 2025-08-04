@@ -1,8 +1,11 @@
 import numpy as np
 import copy
+import itertools
 
 from openfermion import jordan_wigner, QubitOperator, FermionOperator
 from scipy.sparse import csc_matrix, kron
+from scipy.sparse.linalg import spsolve, lsmr
+from scipy.linalg import pinv
 
 from hamil_decomp_utils import ground_state, collection_hamiltonians, dets_to_statevector, get_molecular_data, collections_paulis_covariance_matrix, collection_vars_ref_state, paulis_covariance
 
@@ -91,7 +94,7 @@ def add_forwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple[
         dictionary of operator locations as (collection index, location within collection),
         list of coefficients of Pauli strings by collection
     '''
-    coll_list = sorted_insertion(hamil)  # function below mutates this directly
+    coll_list = sorted_insertion(hamil)
     collections_list = copy.deepcopy(coll_list)
     gs_vec = ground_state(hamil, num_q)[0]
     VAR_TOL = 1E-8  # tolerance below whch variance is treated as zero
@@ -108,10 +111,8 @@ def add_forwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple[
         for current_op_idx, current_op in enumerate(current_coll):  # current operator in current collection being checked
             current_op_var = paulis_covariance(current_op, current_op, gs_vec, num_q)
             threshold_var = VAR_TOL * (list(current_op.terms.values())[0]) ** 2
-            
+            current_op_key = list(current_op.terms.keys())[0]  # Pauli string only without coefficient
             if current_op_var >= threshold_var:  # only take those strings with nonzero variance up to tolerance
-                current_op_key = list(current_op.terms.keys())[0]  # Pauli string only without coefficient
-            
                 if current_op_key not in checked_ops:  # have not checked current operator yet
                     op_locs = [(current_coll_idx, current_op_idx)]
                     repeat_idxs = []  # collection indices to add current operator to
@@ -129,6 +130,8 @@ def add_forwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple[
 
                     ops_locations[current_op_key] = op_locs
                 checked_ops.add(current_op_key)  # avoid checking same operator multiple times
+            else:
+                ops_locations[current_op_key] = [(current_coll_idx, current_op_idx)]
 
     ops_locations_dict = ops_locations.copy()
     for op_key, loc in last_coll_locs.items(): 
@@ -142,12 +145,18 @@ def add_forwards_compatible_paulis(hamil: FermionOperator, num_q: int) -> tuple[
 
     return collections_list, ops_locations_dict, coeffs_matrix
 
-def iterative_coefficient_splitting(molecule: str, num_iter: int) -> tuple[list[list[list[np.float64]]], list[np.ndarray], dict]:
+
+def iterative_coefficient_splitting(molecule: str, num_iter: int, ref_collection_method: int, ref_measurement_method: int, ignore_singulars: bool = True) -> tuple[list[list[list[np.float64]]], list[np.ndarray], dict]:
     '''Optimises coefficient split after all backwards compatible Paulis are added to commuting collections (see add_backwards_compatible_paulis)
     
     Args: 
-        molecule: molecule to perform ICS on
+        molecule: molecule name
         num_iter: number of iterations
+        ref_collection_method: control how reference collection is selected
+            0: random, 1: maximise number of measurements
+        ref_measurement_method: control how reference measurement is selected
+            0: minimise total measurements and constrain error, 1: minimise error and constrain total measurements
+        ignore_singulars: (default True) randomly select a row from the set of its duplicates when solving for coefficients
 
     Returns:
         out: coefficient matrices for each iteration (which are lists over collections), number of measurements for each iteration, dictionary of operator: list of locations in collections
@@ -156,12 +165,12 @@ def iterative_coefficient_splitting(molecule: str, num_iter: int) -> tuple[list[
     hamil, _, num_q, _ = data[molecule]
     
     collections_list, ops_locations, coeffs_matrix = add_forwards_compatible_paulis(hamil, num_q)
+    num_collections = len(collections_list)
     all_coeffs_matrices = []  # list over iterations of coefficient matrices
     all_coeffs_matrices.append(coeffs_matrix)
 
-
     # Precomputations
-    gs_vec = ground_state(hamil, num_q)[0]  # NOTE: this is only for testing, change this to current wavefunction
+    gs_vec = ground_state(hamil, num_q)[0]
     colls_covariance_mats = collections_paulis_covariance_matrix(collections_list, num_q, gs_vec)  
 
     initial_collection_stdevs = np.sqrt(np.array(collection_vars_ground_state(hamil, sorted_insertion(hamil), num_q)[1]))
@@ -169,57 +178,152 @@ def iterative_coefficient_splitting(molecule: str, num_iter: int) -> tuple[list[
     all_msmt_lists = []  # list over iterations of number of measurements
     all_msmt_lists.append(measurement_nums)
 
-    split_pauli_locs = {}  # locations of split paulis, we obviously only compute coefficient splitting for these
-    for pauli, loc in list(ops_locations.items()):
-        if len(loc) > 1:
-            split_pauli_locs[pauli] = loc
+    split_pauli_locs = {}
+    coll_wise_single_pauli_locs = {}  # {collection index: {operator: position in collection}} for unsplit Paulis
+    coll_wise_split_pauli_locs = {}
+    num_split_ops_total = 0
+    num_splittings = []
+    for pauli, locs in list(ops_locations.items()):
+        num_loc = len(locs)
+        if num_loc > 1:
+            num_split_ops_total += num_loc
+            num_splittings.append(num_loc)
+            split_pauli_locs[pauli] = locs
+            for loc in locs:
+                coll_idx, op_idx = loc
+                if coll_idx not in coll_wise_split_pauli_locs.keys():
+                    coll_wise_split_pauli_locs[coll_idx] = {pauli: op_idx}
+                else:
+                    coll_wise_split_pauli_locs[coll_idx][pauli] = op_idx
+        else:
+            coll_idx, op_idx = locs[0]
+            if coll_idx not in coll_wise_single_pauli_locs.keys():
+                coll_wise_single_pauli_locs[coll_idx] = {pauli: op_idx}
+            else:
+                coll_wise_single_pauli_locs[coll_idx][pauli] = op_idx
+
+    singular_rows_ops = {}
+    for i in range(len(split_pauli_locs)):
+        singular_ops = {}
+        op = list(split_pauli_locs.keys())[i]
+        op_split_colls = [a[0] for a in split_pauli_locs[op]]
+        for j in range(len(split_pauli_locs)):
+            if i != j:
+                check_op = list(split_pauli_locs.keys())[j]
+                check_split_colls = [a[0] for a in split_pauli_locs[check_op]]
+                if np.array_equal(op_split_colls, check_split_colls):
+                    singular_colls = []
+                    for k, idx_coll in enumerate(op_split_colls):
+                        idx_op = split_pauli_locs[op][k][1]
+                        idx_check = split_pauli_locs[check_op][k][1]
+                        if np.array_equal(colls_covariance_mats[idx_coll][idx_op], colls_covariance_mats[idx_coll][idx_check]):
+                            singular_colls.append(idx_coll)
+                    if len(singular_colls) > 0:
+                        singular_ops[check_op] = singular_colls
+        if len(singular_ops) > 0:
+            singular_rows_ops[op] = singular_ops
 
     # ICS iterations
     iteration = 0
     rng = np.random.default_rng()  # RNG possibly used for picking reference collection(s)
+    dvar_list = []
+    coll_vars_list = []
     while iteration < num_iter:
+        # print(f"BEGINNING ITERATION {iteration + 1}\n")
         new_coeffs_matrix = copy.deepcopy(coeffs_matrix)
         new_measurement_nums = copy.deepcopy(measurement_nums)
 
+        nonsingular_choice_ops = []
+        all_singular_ops_lists = []
+        for op, singulars in singular_rows_ops.items():
+            add_op = True
+            for singular_op_list in all_singular_ops_lists:
+                if op in singular_op_list:
+                    add_op = False
+                    break
+            if add_op:
+                op_singulars_list = [op]
+                for singular_op in singulars.keys():
+                    op_singulars_list.append(singular_op)
+                all_singular_ops_lists.append(op_singulars_list)
+                nonsingular_choice_idx = rng.choice(len(op_singulars_list))
+                nonsingular_choice_ops.append(op_singulars_list[nonsingular_choice_idx])
+
         # Update coeffs
-        for _, locs in split_pauli_locs.items():  # locs is an array of 2-tuples: (collection index, position index in collection) for P_k (current Pauli)
+        coeffs_opti_matrix = []
+        coeffs_opti_res = []
+        m_ref: int | float
+        solved_op_locs = {}
+        for split_op_idx, locs in enumerate(list(split_pauli_locs.values())):
+            curr_split_op = list(split_pauli_locs.keys())[split_op_idx]
+            if ignore_singulars and (curr_split_op not in singular_rows_ops.keys() or ((curr_split_op in singular_rows_ops.keys()) and (curr_split_op in nonsingular_choice_ops))):
+                solved_op_locs[curr_split_op] = locs
+                if ref_collection_method == 0:  # random
+                    ref_coll_idx, ref_op_idx_in_coll = rng.choice(a=locs)
+                    m_ref = measurement_nums[ref_coll_idx]
+                elif ref_collection_method == 1:  # maximise number of measurements
+                    max_msmt_ref_idx = np.argmax([measurement_nums[idx] for idx in np.array(locs)[:,0]])
+                    ref_coll_idx, ref_op_idx_in_coll = locs[max_msmt_ref_idx]
+                    m_ref = measurement_nums[ref_coll_idx]
 
-            # Picking reference collection
-            # 1. Random (possibly with nonuniform distribution)
-            # ref_coll_idx, ref_op_idx_in_coll = rng.choice(a=locs)  # random collection
+                ref_cov_sum = 0
+                for j in coll_wise_single_pauli_locs[ref_coll_idx].values():
+                    ref_cov_sum += coeffs_matrix[ref_coll_idx][j] * colls_covariance_mats[ref_coll_idx][ref_op_idx_in_coll][j]
+                ref_cov_sum = ref_cov_sum / m_ref
 
-            # 2. Maxmimise number of measurements
-            max_msmt_ref_idx = np.argmax([measurement_nums[idx] for idx in np.array(locs)[:,0]])  # collection that maximises number of measurements
-            ref_coll_idx, ref_op_idx_in_coll = locs[max_msmt_ref_idx]
-            
+                preserve_sum_equation = np.zeros(num_split_ops_total)
+                pre_idx = sum(num_splittings[0:split_op_idx])
 
-            m_ref = measurement_nums[ref_coll_idx]
-            ref_covs = []
-            for j in range(len(coeffs_matrix[ref_coll_idx])):
-                cov_row = np.min((j, ref_op_idx_in_coll))  # covariance matrix is upper triangular
-                cov_col = np.max((j, ref_op_idx_in_coll))
-                ref_covs.append(coeffs_matrix[ref_coll_idx][j] * colls_covariance_mats[ref_coll_idx][cov_row][cov_col])  
-            ref_cov_sum = np.sum(ref_covs)  # sum over ref collection of c_i^ref * cov(P_k, P_i)
-            
-            op_var = colls_covariance_mats[ref_coll_idx][ref_op_idx_in_coll][ref_op_idx_in_coll]  # var(P_k)
-            current_op_coeff_sum = 0  # sum of coefficients of P_k (will remain constant)
-            new_non_ref_coeff_sum = 0  # sum of non-reference-collection coefficients of P_k
+                for loc_idx, loc in enumerate(locs):
+                    curr_coll_idx, curr_op_idx_in_coll = loc
+                    preserve_sum_equation[pre_idx + loc_idx] = 1
 
-            for loc in locs:
-                curr_coll_idx, curr_op_idx_in_coll = loc  # collection whose coefficient is being changed
-                current_op_coeff_sum += coeffs_matrix[curr_coll_idx][curr_op_idx_in_coll]
-                if curr_coll_idx != ref_coll_idx:  # not reference collection
-                    curr_cov_sum = 0  # sum over j != k of c_j^nu * cov(P_k, P_j)
-                    for j in range(len(coeffs_matrix[curr_coll_idx])):
-                        if j != curr_op_idx_in_coll:
-                            cov_row = np.min((j, curr_op_idx_in_coll))  # covariance matrix is upper triangular
-                            cov_col = np.min((j, curr_op_idx_in_coll))
-                            curr_cov_sum += coeffs_matrix[curr_coll_idx][j] * colls_covariance_mats[curr_coll_idx][cov_row][cov_col]
-                    new_coeff = (1/op_var) * ((measurement_nums[curr_coll_idx] / m_ref)*ref_cov_sum - curr_cov_sum)
-                    new_non_ref_coeff_sum += new_coeff
-                    new_coeffs_matrix[curr_coll_idx][curr_op_idx_in_coll] = new_coeff
+                    if curr_coll_idx != ref_coll_idx:
+                        covs_equation = np.zeros(num_split_ops_total)
+                        m_curr = measurement_nums[curr_coll_idx]
+                        curr_cov_sum = 0
+                        for j in coll_wise_single_pauli_locs[curr_coll_idx].values():
+                            curr_cov_sum += coeffs_matrix[curr_coll_idx][j] * colls_covariance_mats[curr_coll_idx][curr_op_idx_in_coll][j]
+                        curr_cov_sum = curr_cov_sum / m_curr
+                        res = ref_cov_sum - curr_cov_sum
 
-            new_coeffs_matrix[ref_coll_idx][ref_op_idx_in_coll] = current_op_coeff_sum - new_non_ref_coeff_sum  # ensure total coefficient sum stays constant
+                        for pstring, i in coll_wise_split_pauli_locs[curr_coll_idx].items():
+                            pstring_pre_idx = 0
+                            j = 0
+                            for check_idx, check_item in enumerate(list(split_pauli_locs.items())):
+                                if pstring in check_item:
+                                    pstring_pre_idx = sum(num_splittings[0:check_idx])
+                                    j = check_item[1].index((curr_coll_idx, i))
+                                    break
+                            j += pstring_pre_idx
+                            covs_equation[j] = coeffs_matrix[curr_coll_idx][i] * colls_covariance_mats[curr_coll_idx][curr_op_idx_in_coll][i] / m_curr
+                        
+                        for ref_pstring, i in coll_wise_split_pauli_locs[ref_coll_idx].items():
+                            ref_pstring_pre_idx = 0
+                            j = 0
+                            for check_idx, check_item in enumerate(list(split_pauli_locs.items())):
+                                if ref_pstring in check_item:
+                                    ref_pstring_pre_idx = sum(num_splittings[0:check_idx])
+                                    j = check_item[1].index((ref_coll_idx, i))
+                                    break
+                            j += ref_pstring_pre_idx
+                            covs_equation[j] = (-1) * coeffs_matrix[ref_coll_idx][i] * colls_covariance_mats[ref_coll_idx][ref_op_idx_in_coll][i] / m_curr
+                        
+                        coeffs_opti_matrix.append(covs_equation)
+                        coeffs_opti_res.append(res)
+                
+                current_op_coeff_sum = np.sum([coeffs_matrix[c_idx][o_idx] for c_idx, o_idx in locs])
+                coeffs_opti_matrix.append(preserve_sum_equation)
+                coeffs_opti_res.append(current_op_coeff_sum)
+
+                new_split_coeffs = lsmr(np.array(coeffs_opti_matrix), coeffs_opti_res, maxiter=2*len(coeffs_opti_res))[0]
+        
+        for solved_op_idx, locs in enumerate(list(solved_op_locs.values())):
+            solved_op = list(solved_op_locs.keys())[solved_op_idx]
+            split_op_idx = list(split_pauli_locs.keys()).index(solved_op)
+            pre_idx = sum(num_splittings[0:split_op_idx])
+            for loc_idx, loc in enumerate(locs):
+                new_coeffs_matrix[loc[0]][loc[1]] = new_split_coeffs[pre_idx + loc_idx]
 
         all_coeffs_matrices.append(new_coeffs_matrix)
 
@@ -236,25 +340,48 @@ def iterative_coefficient_splitting(molecule: str, num_iter: int) -> tuple[list[
         
         new_colls_sum_stdevs, new_colls_vars = collection_vars_ref_state(new_collections_list, num_q, ref_state=gs_vec)  # sum over collections of collection standard deviations, list of collection variances
         dvar = np.sum([new_colls_var / measurement_nums[mu] for mu, new_colls_var in enumerate(new_colls_vars)])
+        dvar_list.append(dvar)
+        coll_vars_list.append(new_colls_vars)
 
-        # # 1. Minimise total number of measurements with dvar constrained
-        # for mu in range(len(measurement_nums)):
-        #     new_measurement_nums[mu] = np.sqrt(new_colls_vars[mu]) * new_colls_sum_stdevs / dvar  # try not rounding up to integer at each iteration
+        if ref_measurement_method == 0:  # minimise total number of measurements with dvar constrained
+            for mu in range(num_collections):
+                new_measurement_nums[mu] = np.ceil(np.sqrt(new_colls_vars[mu]) * new_colls_sum_stdevs / dvar)  # try not rounding up to integer at each iteration
+                
+        elif ref_measurement_method == 1:  # minimise dvar with total number of measurements constrained
+            ref_msmt_coll_idx = np.argmax(new_colls_vars)
+            ref_new_coll_var = new_colls_vars[ref_msmt_coll_idx]
+            init_msmt_sum = np.sum(measurement_nums)
+            msmt_opti_matrix = np.eye(num_collections)
+            msmt_opti_res = np.zeros(num_collections)
+            for i in range(num_collections):
+                if i != ref_msmt_coll_idx:
+                    msmt_opti_matrix[i, ref_msmt_coll_idx] = (-1) * np.sqrt(new_colls_vars[i] / ref_new_coll_var)
+                else:
+                    msmt_opti_matrix[i] = np.ones(num_collections)
+                    msmt_opti_res[i] = init_msmt_sum
+            
+            new_unrounded_msmts = lsmr(msmt_opti_matrix, msmt_opti_res, maxiter=2*num_collections)[0]
+            new_measurement_nums = np.round(new_unrounded_msmts, 0)
+            sum_diff = init_msmt_sum - np.sum(new_measurement_nums)  # this should only be due to rounding errors
+            if sum_diff != 0:
+                max_msmt_idx = np.argmax(new_measurement_nums)
+                new_measurement_nums[max_msmt_idx] += sum_diff
 
-        # 2. Minimise dvar with total number of measurements constrained
-        ref_msmt_coll_idx = np.argmax(new_colls_vars)
-        ref_msmt = measurement_nums[ref_msmt_coll_idx]
-        ref_new_coll_var = new_colls_vars[ref_msmt_coll_idx]
-        for mu in range(len(measurement_nums)):
-            new_measurement_nums[mu] = ref_msmt * np.sqrt(new_colls_vars[mu] / ref_new_coll_var)
+            for msmt_idx, msmt in enumerate(new_measurement_nums):
+                new_max_msmt_idx = np.argmax(new_measurement_nums)
+                if msmt <= 0:
+                    diff = np.abs(msmt) + 1
+                    new_measurement_nums[new_max_msmt_idx] -= diff
+                    new_measurement_nums[msmt_idx] = 1
 
         all_msmt_lists.append(new_measurement_nums)
         measurement_nums = new_measurement_nums
         coeffs_matrix = new_coeffs_matrix
 
+        print(f"ENDING ITERATION {iteration + 1}\n")
         iteration += 1
 
-    return (all_coeffs_matrices, all_msmt_lists, ops_locations)
+    return (all_coeffs_matrices, all_msmt_lists, ops_locations, dvar_list, coll_vars_list)
 
 
 # --- Metrics for grouping methods ---

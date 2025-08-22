@@ -1,0 +1,226 @@
+import numpy as np
+
+from itertools import permutations
+from random import Random
+from qiskit.quantum_info import random_clifford, Statevector
+from hamil_decomp_utils import ground_state, dets_to_statevector, get_molecular_data, powers_of_2, flip_binary_bitstring
+from openfermion import jordan_wigner, qubit_operator_sparse
+
+
+def excitations(ref_det: tuple[int], curr_det: tuple[int], n: int = None) -> tuple[tuple[int], tuple[int], bool, bool | None]:
+    '''Computes degree of excitation of determinant from reference determinant
+    
+    Args:
+        ref_det (tuple[int]): reference determinant
+        curr_det (tuple[int]): excited determinant
+        n (int): check if curr_det is at most n excitations from ref_det
+
+    Returns:
+        annihilated orbitals,\n
+        created orbitals,\n
+        is excited determinant a double excitation,\n
+        is excited determinant at most an n-excitation or None
+    '''
+    set_ref = set(ref_det)
+    set_det = set(curr_det)
+
+    annihilated_orbitals = tuple(set_ref - set_det)
+    created_orbitals = tuple(set_det - set_ref)
+    num_annihilated = len(annihilated_orbitals)
+    num_created = len(created_orbitals)
+
+    is_double_excit = bool(num_annihilated == num_created == 2)
+    is_maximally_n_excit = bool(num_annihilated == num_created <= n) if n else None
+
+    return annihilated_orbitals, created_orbitals, is_double_excit, is_maximally_n_excit
+
+
+def median_of_means(samples_amplitudes, num_means: int, dim: int, det_list: list[tuple[int]]):
+    '''Shuffles and splits amplitudes into equal chunks, returns the median of means of the chunks
+    
+    Args:
+        samples_amplitudes (list[list[np.complex128]]): list of amplitudes for each shot
+        num_means (int): number of chunks to split amplitudes data into
+        dim (int): dimension of Hilbert space
+        det_list (list[tuple[int]]): list of determinants in the same order as samples_amplitudes
+
+    Returns:
+        amplitudes_dict (dict[tuple[int], np.complex128]): dictionary of complex amplitude values by determinant
+    '''
+    NUM_MEANS = num_means
+    DIM = dim
+    rand_inst = Random()
+
+    samples_amplitudes_split = samples_amplitudes.copy()
+    rand_inst.shuffle(samples_amplitudes_split)
+    samples_amplitudes_split = np.array_split(samples_amplitudes_split, NUM_MEANS)
+
+    amplitude_means = []
+    for amplitudes_split in samples_amplitudes_split:
+        amplitude_means.append(2 * (DIM + 1) * np.sum(np.array(amplitudes_split), axis=0) / len(amplitudes_split))
+
+    amplitudes_dict = {}
+    det_wise_amplitude_means = np.array(amplitude_means).T
+    for det_idx, det in enumerate(det_list):
+        amplitudes_dict[det] = np.median(det_wise_amplitude_means[det_idx])
+
+    return amplitudes_dict
+
+
+def classical_shadows(molecule: str, num_samples: int, num_measurements: int, num_means: int = 10, statevector: np.ndarray = None, calc_metrics: bool = False):
+    '''Clifford shadows tomography on given state or ground state, with multiple measurements per Clifford and a median of means approach
+    
+    Args:
+        molecule (str): name of molecule
+        num_samples (int): number of random Cliffords to generate
+        num_measurements (int): number of measurements per Clifford
+        num_means (int): number of means to divide all shots into (must divide num_samples * num_measurements, must be bigger than 1)
+        statevector (np.ndarray): input quantum state (if None exact ground state is used), shape must be (2**n_qubits, 1)
+        calc_metrics (bool): control calculation of performance metrics  (if True exact ground state is computed)
+
+    Returns:
+        amplitudes (coefficients) of double excitation determinants,\n
+        amplitudes (coefficients) of non double excitation determinants,\n
+        dictionary of energy residuals by determinant,\n
+        (fidelity, calculated - actual ground state energy, (energies calculated with sign difference), ground state energy) or None
+    '''
+    data = get_molecular_data()
+    hamil, allowed_dets, num_q, _, _, actual_hf_energy = data[molecule]
+    NUM_SAMPLES = num_samples
+    NUM_Q = num_q
+    DIM = 2**NUM_Q  # dimension o Hilbert space
+    DECIMAL_PRECISION = 7
+    NUM_MEASUREMENTS = num_measurements
+    NUM_MEANS = num_means
+    VACUUM_IDX = 0  # index of vacuum state
+
+    allowed_dets_flipped = [powers_of_2(flip_binary_bitstring(sum([2**k for k in det]), NUM_Q))
+                            for det in allowed_dets
+                            ]
+    ref_det_flipped = allowed_dets[0]
+    # rest of the function follows flipped determinant convention (e.g. HF determinant for H4 is (4,5,6,7))
+    ref_det = powers_of_2(flip_binary_bitstring(sum([2**k for k in ref_det_flipped]), NUM_Q))  # Hartree-Fock determinant
+
+    if statevector == None or calc_metrics:  # testing when exact ground state can be computed
+        gs_vec, gs_energy = ground_state(hamil, NUM_Q)
+        statevector = gs_vec.flatten()
+
+    hamil_operator_list = list(hamil.get_operators())
+    hamil_operator_dict = {}
+    for op in hamil_operator_list:
+        for key, val in op.terms.items():
+            hamil_operator_dict[key] = val
+
+    hf_idx = sum([2**k for k in ref_det])
+    qubit_hamil = jordan_wigner(hamil)
+    qubit_hamil.compress()
+    qubit_hamil = qubit_operator_sparse(qubit_hamil, NUM_Q).real
+    hf_energy = qubit_hamil[hf_idx, hf_idx]  # Hartree-Fock energy
+    c0 = gs_vec[hf_idx][0]
+
+    statevec_nonzero_idxs = np.nonzero(np.round(statevector, DECIMAL_PRECISION))[0]
+    statevec_nonzero_dets = list(map(powers_of_2, statevec_nonzero_idxs))
+    statevec_nonzero_basis_vecs = dets_to_statevector(statevec_nonzero_dets, NUM_Q)
+    double_excite_dets = {}
+    non_double_excite_dets = {}
+
+    for det_idx, det in enumerate(statevec_nonzero_dets):
+        annihilated_orbitals, created_orbitals, is_double_excit, _ = excitations(ref_det, det)
+        det_statevec = statevec_nonzero_basis_vecs[det_idx]
+        basis_idx = sum([2**k for k in det])
+        if is_double_excit:
+            det_op_key_perms = list(permutations(((created_orbitals[0], 1), (created_orbitals[1], 1), (annihilated_orbitals[0], 0), (annihilated_orbitals[1], 0))))
+            for det_op_key in det_op_key_perms:
+                if det_op_key in hamil_operator_dict.keys():
+                    coeff = hamil_operator_dict[det_op_key]
+                    annihilated_orbitals = (det_op_key[2][0], det_op_key[3][0])
+                    created_orbitals = (det_op_key[0][0], det_op_key[1][0])
+            double_excite_dets[det] = [(annihilated_orbitals, created_orbitals), coeff, det_statevec, basis_idx]
+        else:
+            non_double_excite_dets[det] = [(annihilated_orbitals, created_orbitals), det_statevec, basis_idx]
+
+    vacuum_state = np.zeros(DIM)
+    vacuum_state[VACUUM_IDX] = 1
+    statevector = (statevector/np.sqrt(2)) + vacuum_state/np.sqrt(2)
+    statevector = statevector / np.linalg.norm(statevector)
+
+    double_excite_samples_amplitudes = []
+    double_excite_dets_list = list(double_excite_dets.keys())
+
+    non_double_excite_samples_amplitudes = []
+    non_double_excite_dets_list = list(non_double_excite_dets.keys())
+
+    clifford_mats = [random_clifford(NUM_Q).to_matrix() for _ in range(NUM_SAMPLES)]
+
+    for clifford in clifford_mats:
+        res_state = Statevector(clifford @ statevector)
+        res_state = res_state / np.linalg.norm(res_state.data)
+        for _ in range(NUM_MEASUREMENTS):
+            measured_bitstring = res_state.measure()[0][::-1]
+            measured_idx = sum([int(j) * (2**i) for i, j in enumerate(measured_bitstring)])
+            vac_proj_term = clifford[measured_idx][VACUUM_IDX]
+
+            double_excite_sample_amplitudes = []
+            for det_idx, det in enumerate(double_excite_dets_list):
+                _, _, _, det_statevec_idx = double_excite_dets[det]
+                c = np.conj(clifford[measured_idx][det_statevec_idx]) * vac_proj_term
+                double_excite_sample_amplitudes.append(c)
+            double_excite_samples_amplitudes.append(double_excite_sample_amplitudes)
+
+            non_double_excite_sample_amplitudes = []
+            for det_idx, det in enumerate(non_double_excite_dets_list):
+                _, _, det_statevec_idx = non_double_excite_dets[det]
+                c = np.conj(clifford[measured_idx][det_statevec_idx]) * vac_proj_term
+                non_double_excite_sample_amplitudes.append(c)
+            non_double_excite_samples_amplitudes.append(non_double_excite_sample_amplitudes) 
+
+    double_excite_amplitudes = median_of_means(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
+    non_double_excite_amplitudes = median_of_means(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
+
+    calc_energy = 0
+    for det, det_info in double_excite_dets.items():
+        calc_energy += double_excite_amplitudes[det].real * qubit_hamil[hf_idx, det_info[3]] / c0
+    energies = np.array([hf_energy + calc_energy, hf_energy - calc_energy])  # account for possible sign error
+    correct_energy = energies[0] if np.sign(calc_energy) == np.sign(hf_energy) else energies[1]  
+
+    hamil_minus_gs_energy = qubit_hamil - correct_energy * np.eye(DIM)
+    resids = {}
+
+    for det in allowed_dets_flipped:
+        resid = 0
+        det_statevec_idx = sum([2**k for k in det])
+        for double_excite_det, double_excite_det_info in double_excite_dets.items():
+            double_excite_det_idx = double_excite_det_info[3]
+            resid += hamil_minus_gs_energy[det_statevec_idx, double_excite_det_idx] * double_excite_amplitudes[double_excite_det].real
+        for non_double_excite_det, non_double_excite_det_info in non_double_excite_dets.items():
+            non_double_excite_det_idx = non_double_excite_det_info[2]
+            resid += hamil_minus_gs_energy[det_statevec_idx, non_double_excite_det_idx] * non_double_excite_amplitudes[non_double_excite_det].real
+        resids[det] = resid
+
+    metrics_tuple = None
+    if calc_metrics:
+        # Performance of coefficient measurement
+        gs_double_excite_coeffs = {}
+        for det in double_excite_dets_list:
+            idx = sum([2**k for k in det])
+            gs_double_excite_coeffs[det] = gs_vec[idx][0]
+        
+        # 1. fidelity = 1 - <solution coefficients | actual coefficients>, normalised coefficient vectors
+        fidelity = None
+        solution_coeff_vector = []
+        actual_coeff_vector = []
+        for det in double_excite_dets_list:
+            solution_coeff_vector.append(np.abs(double_excite_amplitudes[det].real))
+            actual_coeff_vector.append(np.abs(gs_double_excite_coeffs[det]))
+        solution_coeff_vector = np.array(solution_coeff_vector) / np.linalg.norm(solution_coeff_vector)
+        actual_coeff_vector = np.array(actual_coeff_vector) / np.linalg.norm(actual_coeff_vector)
+        fidelity = 1 - solution_coeff_vector @ actual_coeff_vector
+
+        # 2. difference between calculated energy and ground state
+        closest_energy_idx = np.argmin(np.abs(energies - gs_energy))
+        correct_energy = energies[closest_energy_idx]
+        min_energy_diff = energies[closest_energy_idx] - gs_energy
+
+        metrics_tuple = (fidelity, min_energy_diff, energies, gs_energy)
+
+    return double_excite_amplitudes, non_double_excite_amplitudes, resids, metrics_tuple

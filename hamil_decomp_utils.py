@@ -13,7 +13,7 @@ def get_molecular_data() -> dict[str, tuple[FermionOperator, list[tuple[int]], i
     '''Config data for test molecules
 
     Returns:
-        Dictionary with key = molecule name, value = (fermionic Hamiltonian, allowed dets list, n_qubits, n_electrons)
+        Dictionary with key = molecule name, value = (fermionic Hamiltonian, allowed dets list, n_qubits, n_electrons, FCI energy, HF energy)
     '''
     config_data = {  # hardcoded config info
     #   name    geometry   allowed dets  occ_idxs  active_idxs    num_qubits  num_electrons
@@ -29,15 +29,17 @@ def get_molecular_data() -> dict[str, tuple[FermionOperator, list[tuple[int]], i
         geometry = get_molecular_geometry(DATA_FOLDER_PATH + config_tuple[0])
         molecule = MolecularData(geometry, basis="sto_3g", multiplicity=1, charge=0)
         molecule = run_pyscf(molecule, run_scf=1, run_fci=1)
+        fci_energy = molecule.fci_energy
+        hf_energy = molecule.hf_energy
         fermi_hamil = normal_ordered(get_fermion_operator(molecule.get_molecular_hamiltonian(config_tuple[2], config_tuple[3])))
 
         det = np.genfromtxt(DATA_FOLDER_PATH + config_tuple[1], dtype=int)
         det = det - 1
         det = [tuple(x) for x in det]
-        ref = det[0]  # HARDCODED REF: ENSURE REF (HF ANSATZ) IS ALWAYS AT POSITION 0
+        ref = det[0]  # HARDCODED REF: ENSURE REF (HF) IS ALWAYS AT POSITION 0
         det.sort(key=lambda x: dets_list_order(x, ref))  # presort dets in preferred lexicographic order
 
-        ret_dict[key] = (fermi_hamil, det, config_tuple[4], config_tuple[5])
+        ret_dict[key] = (fermi_hamil, det, config_tuple[4], config_tuple[5], fci_energy, hf_energy)
 
     return ret_dict
 
@@ -63,7 +65,7 @@ def ground_state(hamil: FermionOperator | csc_array | csc_matrix, num_q: int) ->
 
     ground_state_energy, ground_state_vec = eigsh(full_hamil_matrix, k=1, which='SA')  # smallest eigenvalue (ground state energy)
 
-    return ground_state_vec, ground_state_energy
+    return ground_state_vec, ground_state_energy[0]
 
 
 def collection_hamiltonians(collection_list: list[list[QubitOperator]], num_q: int) -> list[csc_matrix]:
@@ -205,7 +207,7 @@ def collection_vars_ref_state(collection_list: list[list[QubitOperator]], num_q:
         var_coll = ((ref_state.getH() @ (coll_hamil_mat @ coll_hamil_mat) @ ref_state) - (ref_state.getH() @ coll_hamil_mat @ ref_state) * (ref_state.getH() @ coll_hamil_mat @ ref_state))
         if type(var_coll) == csc_matrix or type(var_coll) == csr_matrix or type(var_coll) == csc_array:
             var_coll = var_coll.data[0]
-        ref_state_vars.append(var_coll)
+        ref_state_vars.append(var_coll.real)
 
     sum_stdevs = np.sum(np.sqrt(np.array(ref_state_vars)))
 
@@ -249,12 +251,42 @@ def ics_bordered_hessian_dets(ops_locations: dict, colls_cov_matrices: list[np.n
     return None
 
 
+def powers_of_2(num: int):
+    '''Returns tuple of exponents in increasing order (a1, a2, ...) such that num = 2**a1 + 2**a2 + ...
+    '''
+    check_num = num
+    powers = []
+    while check_num > 0:
+        power = np.floor(np.log2(check_num)).astype(int)
+        powers.append(power)
+        check_num -= 2 ** power
+    powers = tuple(powers[::-1])
+
+    return powers
+
+
+def flip_binary_bitstring(num: int, num_bits: int) -> int:
+    '''Returns the number with flipped binary representation 
+    Example: 2 = 10 (binary) -> 01 (binary) = 1
+    '''
+
+    bin_num_rev = list(bin(num)[2::][::-1])
+    for _ in range(num_bits - len(bin_num_rev)):
+        bin_num_rev.append(0)
+    rev_num = 0
+    for i, j in enumerate(bin_num_rev[::-1]):
+        rev_num += int(j) * (2**i)
+
+    return rev_num
+
+
 # Functions for testing, not directly used in hamil_decomps
 
-# x = np.array([[0,1],[1,0]])
-# z = np.array([[1,0],[0,-1]])
-# y = np.array([[0, 0-1j], [0+1j, 0]])
-# i = np.eye(2)
+x = np.array([[0,1],[1,0]])
+z = np.array([[1,0],[0,-1]])
+y = np.array([[0, 0-1j], [0+1j, 0]])
+id = np.eye(2)
+s = np.array([[1, 0], [0, 0+1j]])
 def tensorproduct(*args: np.ndarray) -> np.ndarray:
     return reduce(np.kron, args)
 

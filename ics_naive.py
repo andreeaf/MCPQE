@@ -2,16 +2,16 @@ import numpy as np
 import copy
 
 from hamil_decomp_utils import get_molecular_data, ground_state, collections_paulis_covariance_matrix
-from hamil_decomps import add_forwards_compatible_paulis
+from hamil_decomps import add_forwards_compatible_paulis, collection_vars_ground_state, hadamard_test_residual_variance
 
 def iterative_coefficient_splitting_naive(molecule: str, 
                                           num_meas: int, 
                                           num_iter: int) -> tuple[list[list[list[np.float64]]], list[list[int]]]:
     data = get_molecular_data()
-    hamil, _, num_q, _ = data[molecule]
+    hamil, _, num_q, _, _, _ = data[molecule]
     
     
-    collections_list, ops_locations, coeffs_matrix = add_forwards_compatible_paulis(hamil, num_q)
+    collections_list, ops_locations, coeffs_matrix = add_forwards_compatible_paulis(molecule)
     num_collections = len(collections_list)
     init_coeffs = {}
     for coll in collections_list:
@@ -41,7 +41,7 @@ def iterative_coefficient_splitting_naive(molecule: str,
     all_msmt_lists.append(measurement_nums)
     num_params = sum(len(x) for x in collections_list)
     ref_colls = {op: ops_locations[op][0] for op in ops_locations}
-    print(-1, varH, measurement_nums)
+    # print(-1, varH, measurement_nums)
     for it in range(num_iter):
         matrix = np.zeros((num_params, num_params))
         result = np.zeros(num_params)
@@ -82,13 +82,15 @@ def iterative_coefficient_splitting_naive(molecule: str,
                 for k in range(len(coll)):
                     var += colls_covariance_mats[i][j,k]*coeffs_matrix[i][j]*coeffs_matrix[i][k]
             collection_variances.append(var)
-        varH = (sum(np.sqrt(x) for x in collection_variances))**2/M
-        measurement_nums = [np.ceil(np.sqrt(x) * sum(np.sqrt(y) for y in collection_variances)/varH) for x in collection_variances]
+        # varH = (sum(np.sqrt(x) for x in collection_variances))**2/M
+        # measurement_nums = [np.ceil(np.sqrt(x) * sum(np.sqrt(y) for y in collection_variances)/varH) for x in collection_variances]
+        # all_msmt_lists.append(measurement_nums)
+        measurement_nums = [np.ceil((M / np.sum([np.sqrt(y) for y in collection_variances])) * np.sqrt(x)) for x in collection_variances]
         all_msmt_lists.append(measurement_nums)
 
-        print(it, varH, measurement_nums)
+        # print(it, varH, measurement_nums)
 
     return all_coeffs_matrices, all_msmt_lists
 
-if __name__ == "__main__":
-    iterative_coefficient_splitting_naive('h4', 1000, 10)
+# if __name__ == "__main__":
+#     iterative_coefficient_splitting_naive('h4', 1000, 10)

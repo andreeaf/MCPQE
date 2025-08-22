@@ -1,6 +1,7 @@
 import numpy as np
 import galois
 from openfermion import QubitOperator
+from hamil_decomps import qubitwise_comm, sorted_insertion
 
 # --- Measurement circuit generation for a collection of commuting Paulis ---
 

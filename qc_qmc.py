@@ -160,6 +160,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     ps_h = hamil.get_hamil_pauli_strings(qubit_h)
     groups = utils.group_pauli_strings(ps_h)
 
+    print(groups)
 
     dets.sort(key = lambda x: utils.dets_list_order(x, ref))
 
@@ -173,7 +174,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     ucc_circ = euw.generate_controlled_ucc_circ(nqubits, qubit_ops, params)
 
     if mats is None:
-        mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')
+        mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE MEASUREMENT
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:
@@ -396,6 +397,9 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
             current_ucc_circ = ucc_circ.copy()
             current_ucc_circ.symbol_substitution(param_map)
+            current_statevector = current_ucc_circ.get_statevector()
+            # if step%10 == 0:
+            #     print(current_statevector, current_statevector.shape)
             pop_change = {}
 
             if stoch_hamil:
@@ -411,9 +415,9 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap
                 else:
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
-                                                                  mats, mcirc, mapping)
-                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
-                    hamil_term = hamil_overlap - (shift + hf_e)*overlap
+                                                                  mats, mcirc, mapping)  # <phi_i | H | psi(beta)>
+                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)  # <phi_i | psi(beta)>
+                    hamil_term = hamil_overlap - (shift + hf_e)*overlap  # residual r_i
                 if det == ref:
                      e_proj = hamil_overlap/overlap - hf_e
                 pop_change[det] = -time_step * pops[ref]*hamil_term*signs[det]

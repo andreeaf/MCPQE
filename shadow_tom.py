@@ -1,10 +1,12 @@
 import numpy as np
+import time
 
 from itertools import permutations
 from random import Random
 from qiskit.quantum_info import random_clifford, Statevector
 from hamil_decomp_utils import ground_state, dets_to_statevector, get_molecular_data, powers_of_2, flip_binary_bitstring
 from openfermion import jordan_wigner, qubit_operator_sparse
+from functools import reduce
 
 
 def excitations(ref_det: tuple[int], curr_det: tuple[int], n: int = None) -> tuple[tuple[int], tuple[int], bool, bool | None]:
@@ -67,6 +69,28 @@ def median_of_means(samples_amplitudes, num_means: int, dim: int, det_list: list
     return amplitudes_dict
 
 
+def median_of_means_singles(samples_amplitudes, num_means: int, dim: int, det_list: list[tuple[int]]):
+    NUM_MEANS = num_means
+    DIM = dim
+    rand_inst = Random()
+
+    samples_amplitudes_split = samples_amplitudes.copy()
+    rand_inst.shuffle(samples_amplitudes_split)
+    samples_amplitudes_split = np.array_split(samples_amplitudes_split, NUM_MEANS)
+
+    amplitude_means = [np.average(amplitudes_split, axis=0) for amplitudes_split in samples_amplitudes_split]
+    amplitudes_dict = {}
+    det_wise_amplitude_means = np.array(amplitude_means).T
+    for det_idx, det in enumerate(det_list):
+        amplitudes_dict[det] = np.median(det_wise_amplitude_means[det_idx])
+
+    return amplitudes_dict
+
+
+def tensorproduct(*args: np.ndarray) -> np.ndarray:
+    return reduce(np.kron, args)
+
+
 def classical_shadows(molecule: str, num_samples: int, num_measurements: int, num_means: int = 10, statevector: np.ndarray = None, calc_metrics: bool = False):
     '''Clifford shadows tomography on given state or ground state, with multiple measurements per Clifford and a median of means approach
     
@@ -88,11 +112,18 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
     hamil, allowed_dets, num_q, _, _, actual_hf_energy = data[molecule]
     NUM_SAMPLES = num_samples
     NUM_Q = num_q
-    DIM = 2**NUM_Q  # dimension o Hilbert space
+    DIM = 2**NUM_Q  # dimension of Hilbert space
     DECIMAL_PRECISION = 7
     NUM_MEASUREMENTS = num_measurements
     NUM_MEANS = num_means
     VACUUM_IDX = 0  # index of vacuum state
+    rand_inst = Random()
+    
+    # gates
+    I = np.eye(2)
+    H = (1/np.sqrt(2)) * np.array([[1,1],[1,-1]])
+    F = (1/np.sqrt(2)) * np.array([[1,1j],[1,-1j]])
+    CLIFFORD_SINGLE_GATES = (H,F,I)
 
     allowed_dets_flipped = [powers_of_2(flip_binary_bitstring(sum([2**k for k in det]), NUM_Q))
                             for det in allowed_dets
@@ -150,9 +181,13 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
     non_double_excite_samples_amplitudes = []
     non_double_excite_dets_list = list(non_double_excite_dets.keys())
 
-    clifford_mats = [random_clifford(NUM_Q).to_matrix() for _ in range(NUM_SAMPLES)]
+    # clifford_mats = [random_clifford(NUM_Q).to_matrix() for _ in range(NUM_SAMPLES)]
+    # for clifford in clifford_mats:
 
-    for clifford in clifford_mats:
+    for sample in range(NUM_SAMPLES):
+        if sample == 0 or (sample + 1) % 100 == 0:
+            print(f"SAMPLE {sample + 1}")
+        clifford = tensorproduct(*(CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,2,NUM_Q)))
         res_state = Statevector(clifford @ statevector)
         res_state = res_state / np.linalg.norm(res_state.data)
         for _ in range(NUM_MEASUREMENTS):
@@ -174,8 +209,40 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
                 non_double_excite_sample_amplitudes.append(c)
             non_double_excite_samples_amplitudes.append(non_double_excite_sample_amplitudes) 
 
+    # for sample in range(NUM_SAMPLES):
+    #     if sample == 0 or (sample + 1) % 100 == 0:
+    #         print(f"SAMPLE {sample + 1}")
+    #     single_qub_cliff_mats = [CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,2,NUM_Q)]
+    #     single_qub_cliff_mats_herm = [np.conjugate(mat.T) for mat in single_qub_cliff_mats]
+    #     clifford = tensorproduct(*single_qub_cliff_mats)
+    #     res_state = Statevector(clifford @ statevector)
+    #     res_state = res_state / np.linalg.norm(res_state.data)
+    #     for _ in range(NUM_MEASUREMENTS):
+    #         measured_bitstring = res_state.measure()[0][::-1]
+    #         density_mat_components = []
+    #         for num, mat, matH in zip(measured_bitstring, single_qub_cliff_mats, single_qub_cliff_mats_herm):
+    #             ketbra_bitstring_mat = np.array([[1,0],[0,0]]) if num == "0" else np.array([[0,0],[0,1]])
+    #             density_mat_components.append(3 * matH @ ketbra_bitstring_mat @ mat - I)
+    #         density_mat = tensorproduct(*density_mat_components)
+
+    #         double_excite_coeffs = []
+    #         for det in double_excite_dets_list:
+    #             _,_,_,det_idx = double_excite_dets[det]
+    #             double_excite_coeffs.append(density_mat[0][det_idx] + density_mat[det_idx][0])
+            
+    #         non_double_excite_coeffs = []
+    #         for det in non_double_excite_dets_list:
+    #             _,_,det_idx = non_double_excite_dets[det]
+    #             non_double_excite_coeffs.append(density_mat[0][det_idx] + density_mat[det_idx][0])
+
+    #         double_excite_samples_amplitudes.append(double_excite_coeffs)
+    #         non_double_excite_samples_amplitudes.append(non_double_excite_coeffs)
+
     double_excite_amplitudes = median_of_means(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
     non_double_excite_amplitudes = median_of_means(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
+
+    # double_excite_amplitudes = median_of_means_singles(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
+    # non_double_excite_amplitudes = median_of_means_singles(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
 
     calc_energy = 0
     for det, det_info in double_excite_dets.items():
@@ -204,9 +271,12 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
         for det in double_excite_dets_list:
             idx = sum([2**k for k in det])
             gs_double_excite_coeffs[det] = gs_vec[idx][0]
+        gs_non_double_excite_coeffs = {}
+        for det in non_double_excite_dets_list:
+            idx = sum([2**k for k in det])
+            gs_non_double_excite_coeffs[det] = gs_vec[idx][0]
         
         # 1. fidelity = 1 - <solution coefficients | actual coefficients>, normalised coefficient vectors
-        fidelity = None
         solution_coeff_vector = []
         actual_coeff_vector = []
         for det in double_excite_dets_list:
@@ -221,6 +291,106 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
         correct_energy = energies[closest_energy_idx]
         min_energy_diff = energies[closest_energy_idx] - gs_energy
 
-        metrics_tuple = (fidelity, min_energy_diff, energies, gs_energy)
+        # 3. fidelity including non-double excitations
+        solution_coeff_vector = []
+        actual_coeff_vector = []
+        for det in double_excite_dets_list:
+            solution_coeff_vector.append(np.abs(double_excite_amplitudes[det].real))
+            actual_coeff_vector.append(np.abs(gs_double_excite_coeffs[det]))
+        for det in non_double_excite_dets_list:
+            solution_coeff_vector.append(np.abs(non_double_excite_amplitudes[det].real))
+            actual_coeff_vector.append(np.abs(gs_non_double_excite_coeffs[det]))
+        solution_coeff_vector = np.array(solution_coeff_vector) / np.linalg.norm(solution_coeff_vector)
+        actual_coeff_vector = np.array(actual_coeff_vector) / np.linalg.norm(actual_coeff_vector)
+        t_fidelity = 1 - solution_coeff_vector @ actual_coeff_vector
+        
+        metrics_tuple = (fidelity, min_energy_diff, energies, gs_energy, t_fidelity)
 
     return double_excite_amplitudes, non_double_excite_amplitudes, resids, metrics_tuple
+
+
+def testing_classical_shadows(molecule: str, num_runs: int):
+    NUM_RUNS = num_runs
+    N_M_DICT = {
+        50000: [(1000, 50), (1250, 40), (2000, 25), (2500, 20), (5000, 10)],
+        80000: [(1000, 80), (1250, 64), (2000, 40), (2500, 32), (5000, 16), (8000, 10)],
+        100000: [(1000, 100), (1250, 80), (2000, 50), (2500, 40), (4000, 25), (5000, 20), (10000, 10)],
+        # 150000: [(1000, 150), (1250, 120), (2000, 75), (2500, 60), (5000, 30), (10000, 15), (15000, 10)],
+    }
+
+    res_dict = {}
+    for total_msmts, n_m_vals in N_M_DICT.items():
+        print(f"TOTAL MEASUREMENTS: {total_msmts}")
+        total_msmt_dict = {}
+        for n,m in n_m_vals:
+            print(f"N = {n}, M = {m}")
+            res_arr = []
+            for run in range(NUM_RUNS):
+                print(f"RUN {run+1}")
+                start_time = time.time()
+                a,b,c,d = classical_shadows(molecule, n, m, calc_metrics=True)
+                end_time = time.time()
+                res_arr.append([d[0],d[1],end_time-start_time,d[4],a,b,c])
+                # [fidelity, energy diff, runtime, double excite coeffs, non double excite coeffs, residuals]
+            total_msmt_dict[(n,m)] = res_arr
+            print("\n")
+        print("\n")
+        res_dict[total_msmts] = total_msmt_dict
+
+    return res_dict
+
+import matplotlib.pyplot as plt
+def test_plot(molecule: str, num_runs: int, res_dict, metric_idx: int, errorbars: bool = True, include_title: bool = True):
+    # metric = 0: fidelity, 1: energy diff, 2: runtime, 3: fidelity including non-double excitations
+    RES_DICT = res_dict
+    METRIC_IDX = metric_idx
+    MOLECULE_STR = molecule.upper()
+    NUM_RUNS = num_runs
+
+    x_label = r"$\text{log}_{10} N$"
+    if METRIC_IDX == 0:
+        y_label = "fidelity = 1 - <computed coeffs|actual coeffs>"
+        title = f"{MOLECULE_STR} fidelity, average over {NUM_RUNS} runs"
+    elif METRIC_IDX == 1:
+        y_label = "|computed - actual ground state energy| (hartree/molecule)"
+        title = f"{MOLECULE_STR} energy difference, average over {NUM_RUNS} runs"
+    elif METRIC_IDX == 2:
+        y_label = "runtime (s)"
+        title = f"{MOLECULE_STR} runtime, average over {NUM_RUNS} runs"
+    elif METRIC_IDX == 3:
+        y_label = "fidelity = 1 - <computed coeffs|actual coeffs>"
+        title = f"{MOLECULE_STR} fidelity including non-double excitations, average over {NUM_RUNS} runs"
+    else:
+        y_label = ""
+        title = ""
+
+    plt.figure()
+    for nm, nm_data in RES_DICT.items():
+        line_label = rf"$NM = {nm}$"
+        log_n_vals = []
+        avg_data = []
+        upper_err = [] if errorbars else None
+        lower_err = [] if errorbars else None
+        for n_m_tuple, data in nm_data.items():
+            n, _ = n_m_tuple
+            log_n_vals.append(np.log10(n))
+            datum = [k[METRIC_IDX] for k in data]
+            avg = np.average(datum)
+            avg_data.append(avg)
+            if errorbars:
+                upper_err.append(np.max(datum) - avg)
+                lower_err.append(avg - np.min(datum))
+        plt.errorbar(log_n_vals, avg_data, (lower_err, upper_err), fmt='-o', capsize=5, label=line_label)
+    
+    if include_title:
+        plt.title(title)
+
+    plt.xlabel(x_label)
+    plt.ylabel(y_label)
+    plt.legend()
+
+    if METRIC_IDX == 1:
+        plt.axhline(-0.00159, color='black')
+        plt.axhline(0.00159, color='black')
+
+    plt.show()

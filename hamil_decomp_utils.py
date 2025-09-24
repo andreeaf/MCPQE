@@ -214,43 +214,6 @@ def collection_vars_ref_state(collection_list: list[list[QubitOperator]], num_q:
     return (sum_stdevs, ref_state_vars)
 
 
-def ics_bordered_hessian_dets(ops_locations: dict, colls_cov_matrices: list[np.ndarray], measurement_nums: np.ndarray) -> tuple[np.ndarray, str]:
-    '''Computes determinants of the (2k+1) to (k+n)th principal leading minors of the ICS Hessian for k distinct operators, total n operators including repeats
-    
-    Args:
-        ops_locations: dictionary of operator locations as operator: list of (collection index, position in collection)
-        measurement_nums: list of numbers of measurements of each collection
-        colls_cov_matrices: list of covariance matrices of each collection
-
-    Returns:
-        list of determinants of principal leading minors,
-        "min", "max", or "indeterminate" for local minimum, maximum, or indeterminate respectively
-    '''
-
-    distinct_ops = list(ops_locations.keys())
-    num_distinct_ops = len(distinct_ops)
-    locs = list(ops_locations.values())
-    num_ops_in_colls = [len(op_locs) for op_locs in locs]
-    num_ops_total = sum(num_ops_in_colls)
-
-    hess_dim = num_distinct_ops + num_ops_total
-    upper_zero_submat = np.zeros(shape=(num_distinct_ops, num_distinct_ops))
-
-    lambda_submat = np.zeros(shape=(num_distinct_ops, num_ops_total))
-    for op_idx in range(len(distinct_ops)):
-        for coll_idx, op_idx_in_coll in locs:
-            op_idx_in_all = sum(num_ops_in_colls[0:coll_idx]) + op_idx_in_coll
-            lambda_submat[op_idx][op_idx_in_all] = -1
-
-    covs_submats = []
-    for coll_idx, coll_measurements in enumerate(measurement_nums):
-        covs_submats.append((2 / coll_measurements) * colls_cov_matrices[coll_idx])
-
-    
-
-    return None
-
-
 def powers_of_2(num: int):
     '''Returns tuple of exponents in increasing order (a1, a2, ...) such that num = 2**a1 + 2**a2 + ...
     '''

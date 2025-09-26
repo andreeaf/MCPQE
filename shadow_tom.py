@@ -92,13 +92,17 @@ def tensorproduct(*args: np.ndarray) -> np.ndarray:
     return reduce(np.kron, args)
 
 
-def classical_shadows(molecule: str, num_samples: int, num_measurements: int, num_means: int = 10, statevector: np.ndarray = None, calc_metrics: bool = False):
+def classical_shadows(molecule: str, num_samples: int, num_measurements: int, method: int, num_means: int = 10, statevector: np.ndarray = None, calc_metrics: bool = False):
     '''Clifford shadows tomography on given state or ground state, with multiple measurements per Clifford and a median of means approach
     
     Args:
         molecule (str): name of molecule
         num_samples (int): number of random Cliffords to generate
         num_measurements (int): number of measurements per Clifford
+        method (int): 
+            0: N-qubit Clifford group
+            1: 1-qubit Clifford group with integration over U(N)
+            2: 1-qubit Clifford group with integration over U(1)
         num_means (int): number of means to divide all shots into (must divide num_samples * num_measurements, must be bigger than 1)
         statevector (np.ndarray): input quantum state (if None exact ground state is used), shape must be (2**n_qubits, 1)
         calc_metrics (bool): control calculation of performance metrics  (if True exact ground state is computed)
@@ -118,6 +122,7 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
     NUM_MEASUREMENTS = num_measurements
     NUM_MEANS = num_means
     VACUUM_IDX = 0  # index of vacuum state
+    METHOD = method
     rand_inst = Random()
     
     # gates
@@ -181,74 +186,75 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, nu
 
     non_double_excite_samples_amplitudes = []
     non_double_excite_dets_list = list(non_double_excite_dets.keys())
+    
+    if METHOD == 0:
+        clifford_mats = [random_clifford(NUM_Q).to_matrix() for _ in range(NUM_SAMPLES)]
 
-    # 1. ORIGINAL CLIFFORD SHADOWS 
-    # clifford_mats = [random_clifford(NUM_Q).to_matrix() for _ in range(NUM_SAMPLES)]
-    # for clifford in clifford_mats:
+    if METHOD == 0 or METHOD == 1:
+        for sample in range(NUM_SAMPLES):
+            if sample == 0 or (sample + 1) % 100 == 0:
+                print(f"SAMPLE {sample + 1}")
+            if METHOD == 0:
+                clifford = clifford_mats[sample]
+            else:
+                clifford = tensorproduct(*(CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,3,NUM_Q)))
+            res_state = Statevector(clifford @ statevector)
+            res_state = res_state / np.linalg.norm(res_state.data)
+            for _ in range(NUM_MEASUREMENTS):
+                measured_bitstring = res_state.measure()[0][::-1]
+                measured_idx = sum([int(j) * (2**i) for i, j in enumerate(measured_bitstring)])
+                vac_proj_term = clifford[measured_idx][VACUUM_IDX]
 
-    # 2. TENSOR PRODUCT CIRCUITS WITH INCORRECT(?) INTEGRATION OVER FULL UNITARY GROUP
-    for sample in range(NUM_SAMPLES):
-        if sample == 0 or (sample + 1) % 100 == 0:
-            print(f"SAMPLE {sample + 1}")
-        clifford = tensorproduct(*(CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,3,NUM_Q)))
-        res_state = Statevector(clifford @ statevector)
-        res_state = res_state / np.linalg.norm(res_state.data)
-        for _ in range(NUM_MEASUREMENTS):
-            measured_bitstring = res_state.measure()[0][::-1]
-            measured_idx = sum([int(j) * (2**i) for i, j in enumerate(measured_bitstring)])
-            vac_proj_term = clifford[measured_idx][VACUUM_IDX]
+                double_excite_sample_amplitudes = []
+                for det_idx, det in enumerate(double_excite_dets_list):
+                    _, _, _, det_statevec_idx = double_excite_dets[det]
+                    c = np.conj(clifford[measured_idx][det_statevec_idx]) * vac_proj_term
+                    double_excite_sample_amplitudes.append(c)
+                double_excite_samples_amplitudes.append(double_excite_sample_amplitudes)
 
-            double_excite_sample_amplitudes = []
-            for det_idx, det in enumerate(double_excite_dets_list):
-                _, _, _, det_statevec_idx = double_excite_dets[det]
-                c = np.conj(clifford[measured_idx][det_statevec_idx]) * vac_proj_term
-                double_excite_sample_amplitudes.append(c)
-            double_excite_samples_amplitudes.append(double_excite_sample_amplitudes)
+                non_double_excite_sample_amplitudes = []
+                for det_idx, det in enumerate(non_double_excite_dets_list):
+                    _, _, det_statevec_idx = non_double_excite_dets[det]
+                    c = np.conj(clifford[measured_idx][det_statevec_idx]) * vac_proj_term
+                    non_double_excite_sample_amplitudes.append(c)
+                non_double_excite_samples_amplitudes.append(non_double_excite_sample_amplitudes) 
 
-            non_double_excite_sample_amplitudes = []
-            for det_idx, det in enumerate(non_double_excite_dets_list):
-                _, _, det_statevec_idx = non_double_excite_dets[det]
-                c = np.conj(clifford[measured_idx][det_statevec_idx]) * vac_proj_term
-                non_double_excite_sample_amplitudes.append(c)
-            non_double_excite_samples_amplitudes.append(non_double_excite_sample_amplitudes) 
+        double_excite_amplitudes = median_of_means(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
+        non_double_excite_amplitudes = median_of_means(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
 
-    double_excite_amplitudes = median_of_means(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
-    non_double_excite_amplitudes = median_of_means(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
+    elif METHOD == 2:
+        for sample in range(NUM_SAMPLES):
+            if sample == 0 or (sample + 1) % 100 == 0:
+                print(f"SAMPLE {sample + 1}")
+            single_qub_cliff_mats = [CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,3,NUM_Q)]
+            single_qub_cliff_mats_herm = [np.conjugate(mat.T) for mat in single_qub_cliff_mats]
+            clifford = tensorproduct(*single_qub_cliff_mats)
+            res_state = Statevector(clifford @ statevector)
+            res_state = res_state / np.linalg.norm(res_state.data)
+            for _ in range(NUM_MEASUREMENTS):
+                measured_bitstring = res_state.measure()[0][::-1]
+                density_mat_components = []
+                for num, mat, matH in zip(measured_bitstring, single_qub_cliff_mats, single_qub_cliff_mats_herm):
+                    ketbra_bitstring_mat = np.array([[1,0],[0,0]]) if num == "0" else np.array([[0,0],[0,1]])
+                    density_mat_components.append(3 * matH @ ketbra_bitstring_mat @ mat - I)
+                density_mat = tensorproduct(*density_mat_components)
 
-    # 3. TENSOR PRODUCT CIRCUITS WITH CORRECT(?) INTEGRATION OVER FULL UNITARY GROUP
-    # for sample in range(NUM_SAMPLES):
-    #     if sample == 0 or (sample + 1) % 100 == 0:
-    #         print(f"SAMPLE {sample + 1}")
-    #     single_qub_cliff_mats = [CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,3,NUM_Q)]
-    #     single_qub_cliff_mats_herm = [np.conjugate(mat.T) for mat in single_qub_cliff_mats]
-    #     clifford = tensorproduct(*single_qub_cliff_mats)
-    #     res_state = Statevector(clifford @ statevector)
-    #     res_state = res_state / np.linalg.norm(res_state.data)
-    #     for _ in range(NUM_MEASUREMENTS):
-    #         measured_bitstring = res_state.measure()[0][::-1]
-    #         density_mat_components = []
-    #         for num, mat, matH in zip(measured_bitstring, single_qub_cliff_mats, single_qub_cliff_mats_herm):
-    #             ketbra_bitstring_mat = np.array([[1,0],[0,0]]) if num == "0" else np.array([[0,0],[0,1]])
-    #             density_mat_components.append(3 * matH @ ketbra_bitstring_mat @ mat - I)
-    #         density_mat = tensorproduct(*density_mat_components)
+                double_excite_coeffs = []
+                for det in double_excite_dets_list:
+                    _,_,_,det_idx = double_excite_dets[det]
+                    double_excite_coeffs.append(density_mat[0][det_idx] + density_mat[det_idx][0])
+                
+                non_double_excite_coeffs = []
+                for det in non_double_excite_dets_list:
+                    _,_,det_idx = non_double_excite_dets[det]
+                    non_double_excite_coeffs.append(density_mat[0][det_idx] + density_mat[det_idx][0])
 
-    #         double_excite_coeffs = []
-    #         for det in double_excite_dets_list:
-    #             _,_,_,det_idx = double_excite_dets[det]
-    #             double_excite_coeffs.append(density_mat[0][det_idx] + density_mat[det_idx][0])
-            
-    #         non_double_excite_coeffs = []
-    #         for det in non_double_excite_dets_list:
-    #             _,_,det_idx = non_double_excite_dets[det]
-    #             non_double_excite_coeffs.append(density_mat[0][det_idx] + density_mat[det_idx][0])
+                double_excite_samples_amplitudes.append(double_excite_coeffs)
+                non_double_excite_samples_amplitudes.append(non_double_excite_coeffs)    
 
-    #         double_excite_samples_amplitudes.append(double_excite_coeffs)
-    #         non_double_excite_samples_amplitudes.append(non_double_excite_coeffs)    
+        double_excite_amplitudes = median_of_means_singles(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
+        non_double_excite_amplitudes = median_of_means_singles(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
 
-    # double_excite_amplitudes = median_of_means_singles(double_excite_samples_amplitudes, NUM_MEANS, DIM, double_excite_dets_list)
-    # non_double_excite_amplitudes = median_of_means_singles(non_double_excite_samples_amplitudes, NUM_MEANS, DIM, non_double_excite_dets_list)
-
-    # COMMON
     calc_energy = 0
     for det, det_info in double_excite_dets.items():
         calc_energy += double_excite_amplitudes[det].real * qubit_hamil[hf_idx, det_info[3]] / c0
@@ -401,7 +407,8 @@ def test_plot(molecule: str, num_runs: int, res_dict, metric_idx: int, errorbars
     plt.show()
 
 
-if __name__ == "__main__":
-    res_dict = testing_classical_shadows("h4", 10)
-    with open("shadows_h4_50000_80000_100000.pkl", "wb") as f:
-        pkl.dump(res_dict, f)
+# script for running data collection remotely
+# if __name__ == "__main__":
+#     res_dict = testing_classical_shadows("h4", 10)
+#     with open("shadows_h4_50000_80000_100000.pkl", "wb") as f:
+#         pkl.dump(res_dict, f)

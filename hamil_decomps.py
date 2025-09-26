@@ -267,7 +267,7 @@ def iterative_coefficient_splitting_naive(molecule: str,
     # print(-1, varH, measurement_nums)
     for it in range(NUM_ITER):
         if it == 0 or (it + 1) % 5 == 0:
-            print(it + 1)
+            print(f"ITERATION {it+1}")
         matrix = np.zeros((num_params, num_params))
         result = np.zeros(num_params)
         meas = all_msmt_lists[-1]
@@ -379,7 +379,7 @@ def iterative_coefficient_splitting_penalty(molecule: str,
     HF_DET_IDX = 0  # Hartree-Fock determinant index in flipped_dets, default 0
     M = num_meas
     NUM_ITER = num_iter
-    PENALTY_COEFFS = penalty_coeffs
+    PENALTY_COEFFS = penalty_coeffs  # sequentially applied penalty coefficients
 
     dets = [powers_of_2(
             flip_binary_bitstring(
@@ -471,7 +471,7 @@ def iterative_coefficient_splitting_penalty(molecule: str,
         print(f"PENALTY COEFFICIENT: {p_coeff}")
         for it in range(NUM_ITER):
             if it == 0 or (it + 1) % 5 == 0:
-                print(it + 1)
+                print(f"ITERATION {it+1}")
             matrix = np.zeros((num_params, num_params))
             result = np.zeros(num_params)
             meas = all_msmt_lists[-1]
@@ -553,7 +553,6 @@ def op_coeff_diff(ops_locs: dict, coeffs_mats):
     }
     
     return diff_dict
-
 
 
 # --- Metrics for grouping methods ---

@@ -192,7 +192,7 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, me
 
     if METHOD == 0 or METHOD == 1:
         for sample in range(NUM_SAMPLES):
-            if sample == 0 or (sample + 1) % 100 == 0:
+            if sample == 0 or (sample + 1) % 250 == 0:
                 print(f"SAMPLE {sample + 1}")
             if METHOD == 0:
                 clifford = clifford_mats[sample]
@@ -224,7 +224,7 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, me
 
     elif METHOD == 2:
         for sample in range(NUM_SAMPLES):
-            if sample == 0 or (sample + 1) % 100 == 0:
+            if sample == 0 or (sample + 1) % 250 == 0:
                 print(f"SAMPLE {sample + 1}")
             single_qub_cliff_mats = [CLIFFORD_SINGLE_GATES[i] for i in np.random.randint(0,3,NUM_Q)]
             single_qub_cliff_mats_herm = [np.conjugate(mat.T) for mat in single_qub_cliff_mats]
@@ -320,13 +320,15 @@ def classical_shadows(molecule: str, num_samples: int, num_measurements: int, me
     return double_excite_amplitudes, non_double_excite_amplitudes, resids, metrics_tuple
 
 
-def testing_classical_shadows(molecule: str, num_runs: int):
+def testing_classical_shadows(molecule: str, num_runs: int, method: int):
     NUM_RUNS = num_runs
     N_M_DICT = {
-        50000: [(1000, 50), (1250, 40), (2000, 25), (2500, 20), (5000, 10)],
-        80000: [(1000, 80), (1250, 64), (2000, 40), (2500, 32), (5000, 16), (8000, 10)],
-        100000: [(1000, 100), (1250, 80), (2000, 50), (2500, 40), (5000, 20), (10000, 10)],
-        # 150000: [(1000, 150), (1250, 120), (2000, 75), (2500, 60), (5000, 30), (10000, 15), (15000, 10)],
+        # 50000: [(1000, 50), (1250, 40), (2000, 25), (2500, 20), (5000, 10)],
+        # 80000: [(1000, 80), (1250, 64), (2000, 40), (2500, 32), (5000, 16), (8000, 10)],
+        # 100000: [(1000, 100), (1250, 80), (2000, 50), (2500, 40), (5000, 20), (10000, 10)],
+        150000: [(1000, 150), (1250, 120), (2000, 75), (2500, 60), (5000, 30), (10000, 15), (15000, 10)],
+        200000: [(1000, 200), (1250, 160), (2000, 100), (2500, 80), (5000, 40), (10000, 20), (20000, 10)],
+        500000: [(1000, 500), (1250, 400), (2000, 250), (2500, 200), (5000, 100), (10000, 50), (20000, 25), (25000, 20), (50000, 10)]
     }
 
     res_dict = {}
@@ -339,7 +341,7 @@ def testing_classical_shadows(molecule: str, num_runs: int):
             for run in range(NUM_RUNS):
                 print(f"RUN {run+1}")
                 start_time = time.time()
-                a,b,c,d = classical_shadows(molecule, n, m, calc_metrics=True)
+                a,b,c,d = classical_shadows(molecule, n, m, method, calc_metrics=True)
                 end_time = time.time()
                 res_arr.append([d[0],d[1],end_time-start_time,d[4],a,b,c])
                 # [fidelity, energy diff, runtime, double excite coeffs, non double excite coeffs, residuals]
@@ -408,7 +410,7 @@ def test_plot(molecule: str, num_runs: int, res_dict, metric_idx: int, errorbars
 
 
 # script for running data collection remotely
-# if __name__ == "__main__":
-#     res_dict = testing_classical_shadows("h4", 10)
-#     with open("shadows_h4_50000_80000_100000.pkl", "wb") as f:
-#         pkl.dump(res_dict, f)
+if __name__ == "__main__":
+    res_dict = testing_classical_shadows("h4", 10, 1)
+    with open("shadows_h4_method1_150000_200000_500000.pkl", "wb") as f:
+        pkl.dump(res_dict, f)

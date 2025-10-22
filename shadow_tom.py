@@ -355,7 +355,7 @@ def testing_classical_shadows(molecule: str, num_runs: int, method: int):
                 res_arr.append([d[0],d[1],elapsed_time,d[4],a,b,c])
                 # [fidelity, energy diff, runtime, double excite coeffs, non double excite coeffs, residuals]
             total_msmt_dict[(n,m)] = res_arr
-            filename = f"temp_shadows_{total_msmts}.pkl"
+            filename = f"temp_shadows_{total_msmts}_{n}_{m}.pkl"
             with open(filename, "wb") as f:
                 pkl.dump(res_arr, f)
             print("\n")

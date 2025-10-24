@@ -333,8 +333,8 @@ def testing_classical_shadows(molecule: str, num_runs: int, method: int):
         # 150000: [(1000, 150), (1250, 120), (2000, 75), (2500, 60), (5000, 30), (10000, 15), (15000, 10)],
         # 200000: [(1000, 200), (1250, 160), (2000, 100), (2500, 80), (5000, 40), (10000, 20), (20000, 10)],
         # 500000: [(1000, 500), (2000, 250), (5000, 100), (10000, 50), (20000, 25), (50000, 10)],
-        1000000: [(1000, 1000), (2000, 500), (5000, 200), (10000, 100), (50000, 20), (100000, 10)],
-        2000000: [(1000, 2000), (5000, 400), (10000, 200), (50000, 40), (100000, 20), (200000, 10)],
+        # 1000000: [(1000, 1000), (2000, 500), (5000, 200), (10000, 100), (50000, 20), (100000, 10)],
+        2000000: [(5000, 400), (10000, 200), (50000, 40), (100000, 20), (200000, 10)],
         5000000: [(1000, 5000), (5000, 1000), (10000, 500), (50000, 100), (100000, 50), (200000, 25), (500000, 10)]
     }
 
@@ -355,7 +355,7 @@ def testing_classical_shadows(molecule: str, num_runs: int, method: int):
                 res_arr.append([d[0],d[1],elapsed_time,d[4],a,b,c])
                 # [fidelity, energy diff, runtime, double excite coeffs, non double excite coeffs, residuals]
             total_msmt_dict[(n,m)] = res_arr
-            filename = f"temp_shadows_{total_msmts}_{n}_{m}.pkl"
+            filename = f"temp_{molecule}_shadows_{total_msmts}_method_{method}_{n}_{m}.pkl"
             with open(filename, "wb") as f:
                 pkl.dump(res_arr, f)
             print("\n")
@@ -424,5 +424,5 @@ def test_plot(molecule: str, num_runs: int, res_dict, metric_idx: int, errorbars
 # script for running data collection remotely
 if __name__ == "__main__":
     res_dict = testing_classical_shadows(molecule="h4", num_runs=5, method=2)
-    with open("shadows_h4_method2_1M_2M_5M.pkl", "wb") as f:
+    with open("shadows_h4_method2_2M_5M.pkl", "wb") as f:
         pkl.dump(res_dict, f)

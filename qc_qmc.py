@@ -174,7 +174,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     ucc_circ = euw.generate_controlled_ucc_circ(nqubits, qubit_ops, params)
 
     if mats is None:
-        mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE MEASUREMENT
+        mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE measurement circ and numbers
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:

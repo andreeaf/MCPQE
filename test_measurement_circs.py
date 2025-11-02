@@ -14,13 +14,15 @@ def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]) -> t
         pauli_strings: list of Pauli strings
     
     Returns:
-        (binary matrix, coefficients of Pauli strings)
+        (binary matrix, coefficients of Pauli strings, phases = list of (-1)^(number of Y in string))
     '''
 
     bin_matrix = np.zeros(shape=(2*num_q, len(pauli_strings)))
     coeffs = []
+    phases = []
     
     for idx, pauli_string in enumerate(pauli_strings):
+        y_count = 0
         temp = list(pauli_string.terms.keys())
         if () not in temp:
             (*operator_list,) = temp[0]
@@ -33,9 +35,11 @@ def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]) -> t
                     case 'Y':
                         bin_matrix[act_qubit, idx] = 1
                         bin_matrix[act_qubit+num_q, idx] = 1
+                        y_count += 1
+        phases.append((-1) ** y_count)
         coeffs.append(list(pauli_string.terms.values())[0])
 
-    return (bin_matrix, coeffs)
+    return (bin_matrix, coeffs, phases)
 
 
 def binary_gauss_elim(bin_matrix: np.ndarray) -> np.ndarray:
@@ -111,7 +115,7 @@ def rank(bin_matrix: np.ndarray) -> int:
     return rank
 
 
-def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False) -> tuple[np.ndarray, dict[str, list[int | tuple[int, int]]]]:
+def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False) -> tuple[np.ndarray, dict[str, list[int | tuple[int, int]]], list[float]]:
     '''Full cZ measurement circuit
     
     Args:
@@ -125,7 +129,7 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
     gates_to_apply = []
     GF = galois.GF(2)  # easy usage of numpy for binary matrices
 
-    bin_matrix, coeffs = operator_binary_mapping(num_q, pauli_strings)
+    bin_matrix, coeffs, phases = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
         print("S'_start")
         print(bin_matrix, "\n")
@@ -240,4 +244,4 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
         print("GATES TO APPLY")
         print(gates_to_apply, "\n")
 
-    return (np.array(R), gates_to_apply)
+    return (np.array(R).T, gates_to_apply, phases)

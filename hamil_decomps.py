@@ -51,17 +51,22 @@ def qubitwise_comm(molecule: str) -> list[list[QubitOperator]]:
 
 
 # 1. Sorted Insertion
-def sorted_insertion(molecule: str) -> list[list[QubitOperator]]:
+def sorted_insertion(molecule: str = None, fermi_hamil: FermionOperator = None) -> list[list[QubitOperator]]:
     '''Collects stringwise commuting terms of Hamiltonian using sorted insertion
 
     Args:
         molecule: name of molecule
+        fermi_hamil: fermionic Hamiltonian (will not be used if molecule is given)
 
     Returns:
         list of collections of mutually commuting Pauli strings
     '''
-    data = get_molecular_data()
-    hamil = data[molecule][0]
+    if molecule:
+        data = get_molecular_data()
+        hamil = data[molecule][0]
+    else:
+        hamil = fermi_hamil
+
     pauli_hamil = jordan_wigner(hamil)
     pauli_hamil.compress()
     pauli_hamil_arr = list(pauli_hamil.get_operators())

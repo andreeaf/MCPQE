@@ -11,6 +11,7 @@ import measurements
 import encode_ucc_wavefunction as euw
 import stoch_gates
 import hamil
+from hamil_decomps import sorted_insertion
 from pytket.circuit import OpType
 
 def get_stoch_wfn(pops, params, dets, ref, noise_symbols = None, prob = None, gamma = None):
@@ -159,8 +160,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     qubit_h = jordan_wigner(ferm_hamil)
     ps_h = hamil.get_hamil_pauli_strings(qubit_h)
     groups = utils.group_pauli_strings(ps_h)
-
-    print(groups)
+    # collections = sorted_insertion(fermi_hamil=ferm_hamil)
 
     dets.sort(key = lambda x: utils.dets_list_order(x, ref))
 
@@ -175,6 +175,12 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
     if mats is None:
         mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE measurement circ and numbers
+        # mats = hamil.get_hamil_si_collection_msmt_matrices(collections, nqubits)
+
+    # mats_with_coeffs = [
+    #     (mat[0], mat[1], mat[2], collections[i])
+    #     for i, mat in enumerate(mats)
+    # ]  # list of (collection msmt matrix, qubits to measure, phases, collection) for each collection
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:
@@ -416,6 +422,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 else:
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
                                                                   mats, mcirc, mapping)  # <phi_i | H | psi(beta)>
+                    # hamil_overlap = measurements.measure_collection_overlap(mats_with_coeffs, mcirc, mapping)
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)  # <phi_i | psi(beta)>
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap  # residual r_i
                 if det == ref:

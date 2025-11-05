@@ -1,5 +1,6 @@
 import numpy as np
 import galois
+import pytket
 from openfermion import QubitOperator
 from hamil_decomps import qubitwise_comm, sorted_insertion
 
@@ -115,19 +116,38 @@ def rank(bin_matrix: np.ndarray) -> int:
     return rank
 
 
-def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False) -> tuple[np.ndarray, dict[str, list[int | tuple[int, int]]], list[float]]:
+def add_ancilla_Z(op: QubitOperator) -> QubitOperator:
+    '''Adds an ancilliary qubit at position 0 and applies Z'''
+
+    new_term_str = "Z0"
+    for pauli_str in op.terms.keys():
+        for qubit_idx, gate in pauli_str:
+            new_term_str += f" {gate}{qubit_idx+1}"
+
+    return QubitOperator(new_term_str, list(op.terms.values())[0])
+
+
+def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=True, verbose=False) -> tuple[np.ndarray,
+                                                                                           pytket.Circuit,
+                                                                                           list[float],
+                                                                                           list[dict[str, list[int | tuple[int, int]]]]]:
     '''Full cZ measurement circuit
     
     Args:
         num_q: number of qubits
         pauli_strings: list of commuting collection of Pauli strings
+        add_ancilla: add Z gate on ancilliary qubit
         verbose: if True prints binary matrix at each stage
 
     Returns:
-        (R matrix, measurement circuit)
+        (R matrix, measurement circuit (pytket), phases, list of gates in measurement circuit)
     '''
     gates_to_apply = []
     GF = galois.GF(2)  # easy usage of numpy for binary matrices
+
+    if add_ancilla:
+        pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
+        num_q += 1
 
     bin_matrix, coeffs, phases = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
@@ -244,4 +264,17 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], verbose=False
         print("GATES TO APPLY")
         print(gates_to_apply, "\n")
 
-    return (np.array(R).T, gates_to_apply, phases)
+    msmt_circ = pytket.Circuit(num_q)
+    for gate in gates_to_apply:
+        for gate_name, qubits in gate.items():
+            if gate_name == 'H':
+                for qubit in qubits:
+                    msmt_circ.H(qubit)
+            elif gate_name == 'S':
+                for qubit in qubits:
+                    msmt_circ.S(qubit)
+            elif gate_name == 'cZ':
+                for qubit1, qubit2 in qubits:
+                    msmt_circ.CZ(qubit1, qubit2)
+
+    return (np.array(R).T, msmt_circ, phases, gates_to_apply)

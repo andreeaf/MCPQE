@@ -10,6 +10,8 @@ from openfermionpyscf import run_pyscf
 from pytket.circuit import Circuit
 from pytket.pauli import Pauli
 from scipy.sparse import csr_array, save_npz
+from test_measurement_circs import cZ_measurement
+from scipy.sparse import csr_matrix
 
 import utils
 
@@ -159,3 +161,18 @@ def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str = None):
     #with open(filename, 'wb') as matrix_file:
     #    pickle.dump(mats, matrix_file)
     return mats
+
+
+def get_hamil_si_collection_msmt_matrices(collections: list[list[QubitOperator]], num_q: int):
+    '''Measurement matrices for each collection
+    
+    Returns list of [measurement matrix, qubits to measure, phases] for each collection
+    '''
+    ret_arr = []
+
+    for collection in collections:
+        R_mat, measurement_circ, phases, _ = cZ_measurement(num_q, collection)  # this adds the ancilla with Z
+        qubits_to_measure = [tuple(np.where(R_row == 1)[0]) for R_row in R_mat]
+        ret_arr.append([csr_array(measurement_circ.get_unitary()), qubits_to_measure, phases])
+
+    return ret_arr

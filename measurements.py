@@ -2,6 +2,7 @@ import bisect
 import numpy as np
 import utils
 from pytket.extensions.qiskit import AerBackend, AerStateBackend
+from itertools import product
 
 def generate_hamil_overlap_measure_circuits(mcirc, ps_g, nqubits):
     backend = AerBackend()
@@ -89,14 +90,12 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
     return hamil_elem
 
 
-def measure_collection_overlap(mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False):
+def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False):
     hamil_overlap = 0
     curr_statevector = mcirc.get_statevector()
 
     for coll_msmt_inputs in mats_with_coeffs:
         msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
-        dim = msmt_mat.shape[0]
-        num_q = int(np.log2(dim))  # includes ancilla
         statevec = msmt_mat.dot(curr_statevector)
         counts = get_counts(statevec, nshots, mapping, gaussian)
 
@@ -106,14 +105,11 @@ def measure_collection_overlap(mats_with_coeffs, mcirc, mapping, nshots=0, gauss
                 list(pauli_string.terms.keys())[0][i][0]
                 for i in range(len(list(pauli_string.terms.keys())[0]))
             ]
-            nonzero_msmt_count = utils.get_bits(np.sum([2**idx for idx in qubits_to_measure]), num_q)
-            sign = phase
 
-            for applied_qubit_idx in pauli_string_applied_qubits:
-                if nonzero_msmt_count[applied_qubit_idx] == 1:
-                    sign *= -1  # why are we doing this? 
+            msmt_det_binaries = list(product(*[[1] if (num_q-i) in qubits_to_measure else [0,1] for i in range(num_q+1)]))
+            sign = phase * ((-1) ** (len(qubits_to_measure)))
 
-            hamil_overlap += sign * coeff * counts[nonzero_msmt_count]
+            hamil_overlap += sign * coeff * np.sum([counts[det_bin] for det_bin in msmt_det_binaries])
             
     return hamil_overlap
 

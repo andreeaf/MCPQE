@@ -101,13 +101,14 @@ def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0
 
         for pauli_string, phase, qubits_to_measure in list(zip(coll, phases, qubits_to_measure_list)):
             coeff = list(pauli_string.terms.values())[0]
-            pauli_string_applied_qubits = [
-                list(pauli_string.terms.keys())[0][i][0]
-                for i in range(len(list(pauli_string.terms.keys())[0]))
-            ]
+            # pauli_string_applied_qubits = [
+            #     list(pauli_string.terms.keys())[0][i][0]
+            #     for i in range(len(list(pauli_string.terms.keys())[0]))
+            # ]  # this is not necessary
 
-            msmt_det_binaries = list(product(*[[1] if (num_q-i) in qubits_to_measure else [0,1] for i in range(num_q+1)]))
+            msmt_det_binaries = list(product(*[[1] if (num_q-i) in qubits_to_measure else [0,1] for i in range(num_q+1)]))  # list of dets in binary with qubits to measure = 1
             sign = phase * ((-1) ** (len(qubits_to_measure)))
+            # sign = phase
 
             hamil_overlap += sign * coeff * np.sum([counts[det_bin] for det_bin in msmt_det_binaries])
             

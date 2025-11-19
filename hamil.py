@@ -172,7 +172,7 @@ def get_hamil_si_collection_msmt_matrices(collections: list[list[QubitOperator]]
 
     for collection in collections:
         R_mat, measurement_circ, phases, _ = cZ_measurement(num_q, collection)  # this adds the ancilla with Z
-        qubits_to_measure = [tuple(np.where(R_row == 1)[0]) for R_row in R_mat]
+        qubits_to_measure = [(0,) + tuple(np.where(R_row == 1)[0] + 1) for R_row in R_mat]
         ret_arr.append([csr_array(measurement_circ.get_unitary()), qubits_to_measure, phases])
 
     return ret_arr

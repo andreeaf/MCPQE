@@ -145,9 +145,9 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     gates_to_apply = []
     GF = galois.GF(2)  # easy usage of numpy for binary matrices
 
-    if add_ancilla:
-        pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
-        num_q += 1
+    # if add_ancilla:
+    #     pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
+    #     num_q += 1
 
     bin_matrix, coeffs, phases = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
@@ -264,17 +264,20 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("GATES TO APPLY")
         print(gates_to_apply, "\n")
 
-    msmt_circ = pytket.Circuit(num_q)
+    msmt_circ = pytket.Circuit(num_q+1)
+    msmt_circ.Z(0)
+
     for gate in gates_to_apply:
         for gate_name, qubits in gate.items():
             if gate_name == 'H':
                 for qubit in qubits:
-                    msmt_circ.H(qubit)
+                    msmt_circ.H(qubit+1)
             elif gate_name == 'S':
                 for qubit in qubits:
-                    msmt_circ.S(qubit)
+                    msmt_circ.S(qubit+1)
             elif gate_name == 'cZ':
                 for qubit1, qubit2 in qubits:
-                    msmt_circ.CZ(qubit1, qubit2)
+                    msmt_circ.CZ(qubit1+1, qubit2+1)
+
 
     return (np.array(R).T, msmt_circ, phases, gates_to_apply)

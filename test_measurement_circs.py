@@ -2,7 +2,9 @@ import numpy as np
 import galois
 import pytket
 from openfermion import QubitOperator
+from openfermion.linalg import qubit_operator_sparse
 from hamil_decomps import qubitwise_comm, sorted_insertion
+from hamil_decomp_utils import powers_of_2
 
 # --- Measurement circuit generation for a collection of commuting Paulis ---
 
@@ -127,7 +129,7 @@ def add_ancilla_Z(op: QubitOperator) -> QubitOperator:
     return QubitOperator(new_term_str, list(op.terms.values())[0])
 
 
-def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=True, verbose=False) -> tuple[np.ndarray,
+def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=True, verbose=False) -> tuple[np.ndarray,
                                                                                            pytket.Circuit,
                                                                                            list[float],
                                                                                            list[dict[str, list[int | tuple[int, int]]]]]:
@@ -145,9 +147,9 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     gates_to_apply = []
     GF = galois.GF(2)  # easy usage of numpy for binary matrices
 
-    # if add_ancilla:
-    #     pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
-    #     num_q += 1
+    if add_ancilla:
+        pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
+        num_q += 1
 
     bin_matrix, coeffs, phases = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
@@ -264,20 +266,75 @@ def cZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("GATES TO APPLY")
         print(gates_to_apply, "\n")
 
-    msmt_circ = pytket.Circuit(num_q+1)
-    msmt_circ.Z(0)
+    msmt_circ = pytket.Circuit(num_q)
 
     for gate in gates_to_apply:
         for gate_name, qubits in gate.items():
             if gate_name == 'H':
                 for qubit in qubits:
-                    msmt_circ.H(qubit+1)
+                    msmt_circ.H(qubit)
             elif gate_name == 'S':
                 for qubit in qubits:
-                    msmt_circ.S(qubit+1)
+                    msmt_circ.S(qubit)
             elif gate_name == 'cZ':
                 for qubit1, qubit2 in qubits:
-                    msmt_circ.CZ(qubit1+1, qubit2+1)
-
+                    msmt_circ.CZ(qubit1, qubit2)
 
     return (np.array(R).T, msmt_circ, phases, gates_to_apply)
+
+
+# TESTING MODULE FOR USING MSMT CIRCUIT IN HADAMARD TEST
+def idx_from_binary(bin: list[int]):
+    sum = 0
+    for i, val in enumerate(bin):
+        sum += val * (2**i)
+    return sum
+
+def check_coeff(coll_idx, pstring_idx, det_idx):
+    NUM_Q = 4
+    DIM = 2**NUM_Q
+    Z = np.array([[1,0],[0,-1]])
+    COLLS = sorted_insertion("h2")
+    CZ_MSMT_DATA = [CZ_measurement(NUM_Q, coll) for coll in COLLS]
+    ALL_DETS_BIN = [
+        [1 if i in powers_of_2(j) else 0 for i in range(NUM_Q+1)]
+        for j in range(2*DIM)
+    ]
+    statevec = [2*np.random.rand()-1 for _ in range(DIM)]  # pick a random real-coefficient statevector for testing
+    statevec = np.array(statevec) / np.linalg.norm(statevec)
+
+    COLL = COLLS[coll_idx]
+    PSTRING = COLL[pstring_idx]
+    print(PSTRING)
+    PSTRING_COEFF = list(PSTRING.terms.values())[0]
+    # PSTRING = PSTRING / list(PSTRING.terms.values())[0]
+    R, msmt_circ, phases, _ = CZ_MSMT_DATA[coll_idx]
+    msmt_circ_mat = msmt_circ.get_unitary()
+    print(f"{det_idx}-TH COEFFICIENT OF STATEVECTOR: {statevec[det_idx]}")
+
+    pstring_mat = qubit_operator_sparse(PSTRING, NUM_Q).toarray()
+    correct_coeff = (pstring_mat @ statevec)[det_idx]
+    print(f"CORRECT OVERLAP: {correct_coeff}")
+
+    msmt_det_statevec = np.zeros(DIM)
+    msmt_det_statevec[det_idx] = 1
+    h_test_statevec = (0.5) * np.concatenate(((msmt_det_statevec+statevec), (msmt_det_statevec-statevec)))
+    h_test_pstring_mat = np.kron(Z, pstring_mat)
+    print(f"HADAMARD TEST OVERLAP: {(h_test_statevec.conj()) @ h_test_pstring_mat @ h_test_statevec}")
+
+    qubits_to_measure = [i for i in range(NUM_Q+1) if R[pstring_idx][i] == 1]
+    print(f"QUBITS TO MEASURE: {qubits_to_measure}")
+    xor_vals = []
+    for det_bin in ALL_DETS_BIN:
+        xor_val = 0
+        for qub_idx in qubits_to_measure:
+            xor_val = xor_val ^ det_bin[qub_idx]
+        xor_vals.append(xor_val)
+    
+    msmt_res_statevec = msmt_circ_mat @ h_test_statevec
+    msmt_res_probs = np.multiply(msmt_res_statevec.conj(), msmt_res_statevec).real
+    msmt_coeff = 0
+    for idx, xor_val in enumerate(xor_vals):
+        phase = (-1) ** (xor_val)
+        msmt_coeff += phase * msmt_res_probs[idx] * PSTRING_COEFF
+    print(f"MEASURED OVERLAP: {msmt_coeff}")

@@ -10,7 +10,7 @@ from openfermionpyscf import run_pyscf
 from pytket.circuit import Circuit
 from pytket.pauli import Pauli
 from scipy.sparse import csr_array, save_npz
-from test_measurement_circs import cZ_measurement
+from test_measurement_circs import CZ_measurement
 from scipy.sparse import csr_matrix
 
 import utils
@@ -171,8 +171,11 @@ def get_hamil_si_collection_msmt_matrices(collections: list[list[QubitOperator]]
     ret_arr = []
 
     for collection in collections:
-        R_mat, measurement_circ, phases, _ = cZ_measurement(num_q, collection)  # this adds the ancilla with Z
-        qubits_to_measure = [(0,) + tuple(np.where(R_row == 1)[0] + 1) for R_row in R_mat]
-        ret_arr.append([csr_array(measurement_circ.get_unitary()), qubits_to_measure, phases])
+        R_mat, measurement_circ, phases, _ = CZ_measurement(num_q, collection)  # this adds the ancilla with Z
+        qubits_to_measure = [tuple(np.where(R_row == 1)[0]) for R_row in R_mat]
+        msmt_circ_mat = measurement_circ.get_unitary()
+        if np.all(np.isreal(msmt_circ_mat)):
+            msmt_circ_mat = msmt_circ_mat.real
+        ret_arr.append([csr_array(msmt_circ_mat), qubits_to_measure, phases])
 
     return ret_arr

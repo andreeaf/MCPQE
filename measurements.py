@@ -64,12 +64,9 @@ def measure_hamil_overlap_shots(ps_g, circuits, n_shots):
 
 def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0, gaussian = False):
     hamil_elem = 0
-    vector = mcirc.get_statevector()
     for pauli_group, mat in mats.items():
         if pauli_group in ps_g:
-            #circ = mcirc.copy()
-            #circ.append(mat)
-            #vector = circ.get_statevector()
+            vector = mcirc.get_statevector()
             vector = mat.dot(vector)
             counts = get_counts(vector, nshots, mapping, gaussian)
             for pauli_str in ps_g[pauli_group]:
@@ -95,22 +92,18 @@ def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0
     curr_statevector = mcirc.get_statevector()
 
     for coll_msmt_inputs in mats_with_coeffs:
-        msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
+        msmt_mat, qubits_to_measure_list, _, coll = coll_msmt_inputs
         statevec = msmt_mat.dot(curr_statevector)
         counts = get_counts(statevec, nshots, mapping, gaussian)
 
-        for pauli_string, phase, qubits_to_measure in list(zip(coll, phases, qubits_to_measure_list)):
+        for pauli_string, qubits_to_measure in list(zip(coll, qubits_to_measure_list)):
             coeff = list(pauli_string.terms.values())[0]
-            # pauli_string_applied_qubits = [
-            #     list(pauli_string.terms.keys())[0][i][0]
-            #     for i in range(len(list(pauli_string.terms.keys())[0]))
-            # ]  # this is not necessary
-
-            msmt_det_binaries = list(product(*[[1] if (num_q-i) in qubits_to_measure else [0,1] for i in range(num_q+1)]))  # list of dets in binary with qubits to measure = 1
-            sign = phase * ((-1) ** (len(qubits_to_measure)))
-            # sign = phase
-
-            hamil_overlap += sign * coeff * np.sum([counts[det_bin] for det_bin in msmt_det_binaries])
+            for count in list(counts.keys()):
+                xor_val += 0
+                for measured_qubit_idx in qubits_to_measure:
+                    xor_val = xor_val ^ count[measured_qubit_idx]
+                xor_phase = (-1) ** xor_val
+                hamil_overlap += coeff * xor_phase * counts[count]
             
     return hamil_overlap
 

@@ -164,10 +164,10 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     n = N // 2
 
     # Matrix corresponding to first Gaussian elimination
-    R0 = first_gauss_elim[0:start_rank].copy().astype(int)  # (this is a conjecture)
+    R0_inv = first_gauss_elim[0:start_rank].copy().astype(int)  # (this is a conjecture)
     if verbose:
-        print("R_0")
-        print(R0, "\n")
+        print("R_0_inv")
+        print(R0_inv, "\n")
 
     # Rearrange on X submatrix so linearly independent rows are on top
     z_submat = lin_indep_cols[0:n]
@@ -202,10 +202,13 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
 
     # Invert upper (k,k) submatrix of X submatrix, multiply by current
     x_upper_submat = x_re_rearr[0:start_rank]
-    R1 = np.linalg.inv(x_upper_submat)  # x_upper_submat should be fullrank
+    R1_inv = x_upper_submat
+    R1 = np.linalg.inv(R1_inv)  # x_upper_submat should be fullrank
     z_new_submat = z_re_rearr @ R1
     x_new_submat = x_re_rearr @ R1
     if verbose:
+        print("R_1_inv")
+        print(x_upper_submat, "\n")
         print("R_1")
         print(R1, "\n")
         print("S_2")
@@ -225,17 +228,22 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("S_3")
         print(z_res)
         print(x_res, "\n")
-    R2 = GF(np.vstack((np.eye(start_rank), np.zeros((n - start_rank, start_rank)))).astype(int))
+    R2_inv = GF(np.vstack((np.eye(start_rank), np.zeros((n - start_rank, start_rank)))).astype(int))
     if verbose:
-        print("R_2")
-        print(R2, "\n")
+        print("R_2_inv")
+        print(R2_inv, "\n")
     
     # Processing to get S_4 = S_graph
     xres_temp = np.array(x_res, dtype=int)
-    R3 = np.linalg.inv(GF(xres_temp))  # X submatrix should be (square and) fullrank
+    R3_inv = GF(xres_temp)
+    R3 = np.linalg.inv(R3_inv)  # X submatrix should be (square and) fullrank
     S3 = np.vstack((z_res, x_res)).astype(np.uint8)
     S3R3 = S3 @ R3
     if verbose:
+        print("R_3_inv")
+        print(xres_temp, "\n")
+        print("R_3")
+        print(R3, "\n")
         print("S_3 * R_3")
         print(S3R3, "\n")
 
@@ -248,12 +256,12 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
             S3R3[row] = new_row
     gates_to_apply.append({'S': phase_rows})
 
-    R = R3 @ R2 @ R1 @ GF(R0)
+    R_inv = R3_inv @ R2_inv @ R1_inv @ GF(R0_inv)
     if verbose:
         print("S_4")
         print(S3R3, "\n")
-        print("R")
-        print(R, "\n")
+        print("R_inv")
+        print(R_inv, "\n")
         
     cZ_gates = []  # qubit pairs on which to apply cZ
     for graph_row in range(1,n):
@@ -280,7 +288,7 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
                 for qubit1, qubit2 in qubits:
                     msmt_circ.CZ(qubit1, qubit2)
 
-    return (np.array(R).T, msmt_circ, phases, gates_to_apply)
+    return (np.array(R_inv).T, msmt_circ, phases, gates_to_apply)
 
 
 # TESTING MODULE FOR USING MSMT CIRCUIT IN HADAMARD TEST

@@ -290,40 +290,41 @@ def idx_from_binary(bin: list[int]):
         sum += val * (2**i)
     return sum
 
-def check_coeff(coll_idx, pstring_idx, det_idx):
-    NUM_Q = 4
-    DIM = 2**NUM_Q
-    Z = np.array([[1,0],[0,-1]])
-    COLLS = sorted_insertion("h2")
+NUM_Q = 4
+DIM = 2**NUM_Q
+Z = np.array([[1,0],[0,-1]])
+
+statevec = [2*np.random.rand()-1 for _ in range(DIM)]  # pick a random real-coefficient statevector for testing, outside the function to prevent repicking
+statevec = np.array(statevec) / np.linalg.norm(statevec)
+def check_coeff(coll_idx, pstring_idx, det_idx, colls=None):
+    COLLS = sorted_insertion("h2") if not colls else colls
     CZ_MSMT_DATA = [CZ_measurement(NUM_Q, coll) for coll in COLLS]
     ALL_DETS_BIN = [
         [1 if i in powers_of_2(j) else 0 for i in range(NUM_Q+1)]
         for j in range(2*DIM)
     ]
-    statevec = [2*np.random.rand()-1 for _ in range(DIM)]  # pick a random real-coefficient statevector for testing
-    statevec = np.array(statevec) / np.linalg.norm(statevec)
-
     COLL = COLLS[coll_idx]
     PSTRING = COLL[pstring_idx]
-    print(PSTRING)
+    # print(PSTRING)
     PSTRING_COEFF = list(PSTRING.terms.values())[0]
     # PSTRING = PSTRING / list(PSTRING.terms.values())[0]
-    R, msmt_circ, phases, _ = CZ_MSMT_DATA[coll_idx]
+    R, msmt_circ, _, _ = CZ_MSMT_DATA[coll_idx]
     msmt_circ_mat = msmt_circ.get_unitary()
-    print(f"{det_idx}-TH COEFFICIENT OF STATEVECTOR: {statevec[det_idx]}")
+    # print(f"{det_idx}-TH COEFFICIENT OF STATEVECTOR: {statevec[det_idx]}")
 
     pstring_mat = qubit_operator_sparse(PSTRING, NUM_Q).toarray()
     correct_coeff = (pstring_mat @ statevec)[det_idx]
-    print(f"CORRECT OVERLAP: {correct_coeff}")
+    # print(f"CORRECT OVERLAP: {correct_coeff}")
 
     msmt_det_statevec = np.zeros(DIM)
     msmt_det_statevec[det_idx] = 1
     h_test_statevec = (0.5) * np.concatenate(((msmt_det_statevec+statevec), (msmt_det_statevec-statevec)))
     h_test_pstring_mat = np.kron(Z, pstring_mat)
-    print(f"HADAMARD TEST OVERLAP: {(h_test_statevec.conj()) @ h_test_pstring_mat @ h_test_statevec}")
+    h_test_overlap = (h_test_statevec.conj()) @ h_test_pstring_mat @ h_test_statevec
+    # print(f"HADAMARD TEST OVERLAP: {h_test_overlap}")
 
     qubits_to_measure = [i for i in range(NUM_Q+1) if R[pstring_idx][i] == 1]
-    print(f"QUBITS TO MEASURE: {qubits_to_measure}")
+    # print(f"QUBITS TO MEASURE: {qubits_to_measure}")
     xor_vals = []
     for det_bin in ALL_DETS_BIN:
         xor_val = 0
@@ -337,4 +338,5 @@ def check_coeff(coll_idx, pstring_idx, det_idx):
     for idx, xor_val in enumerate(xor_vals):
         phase = (-1) ** (xor_val)
         msmt_coeff += phase * msmt_res_probs[idx] * PSTRING_COEFF
-    print(f"MEASURED OVERLAP: {msmt_coeff}")
+    # print(f"MEASURED OVERLAP: {msmt_coeff}")
+    return(correct_coeff, h_test_overlap, msmt_coeff)

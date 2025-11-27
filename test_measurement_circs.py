@@ -4,7 +4,7 @@ import pytket
 from openfermion import QubitOperator
 from openfermion.linalg import qubit_operator_sparse
 from hamil_decomps import qubitwise_comm, sorted_insertion
-from hamil_decomp_utils import powers_of_2
+from hamil_decomp_utils import powers_of_2, tensorproduct
 
 # --- Measurement circuit generation for a collection of commuting Paulis ---
 
@@ -129,11 +129,67 @@ def add_ancilla_Z(op: QubitOperator) -> QubitOperator:
     return QubitOperator(new_term_str, list(op.terms.values())[0])
 
 
+def swap_pairs_from_top_bottom(top_qubits: list[int], bottom_qubits: list[int]) -> list[tuple[int]]:
+    '''Returns (the minimal number of) pairs of qubits to swap to produce permutation of the form [qubits at top, qubits at bottom]. 
+    top_qubits and bottom_qubits must contain all qubit indices.
+
+    Args:
+        top_qubits: list of qubit indices at the top of the new permutation
+        bottom_qubits: list of qubit indices below top_qubits in the new permutation
+
+    Returns:
+        swap_qubit_pairs: list of qubit index tuples to perform SWAP on, in order
+    '''
+    new_perm = top_qubits
+    new_perm.extend(bottom_qubits)
+    num_qubits = len(new_perm)
+    visited = [False]*num_qubits
+    swap_qubit_pairs = []
+
+    for i in range(num_qubits):
+        if visited[i] or new_perm[i] == i:
+            continue
+
+        cycle = []
+        j = i
+        while not visited[j]:
+            visited[j] = True
+            cycle.append(j)
+            j = new_perm[j]
+
+        if len(cycle) > 1:
+            qubit_1 = cycle[0]
+            for cycled_qubit in reversed(cycle[1:]):
+                swap_qubit_pairs.append((qubit_1, cycled_qubit))
+
+    return swap_qubit_pairs
+
+
+def swap_rows_diagonalise(unswapped_mat: np.ndarray) -> np.ndarray:
+    '''Swaps rows of matrix until it is diagonal. Assumes this can be done.
+    
+    Args:
+        unswapped_mat: matrix whose rows can be swapped to make it diagonal
+    
+    Returns:
+        swapped_mat: row-swapped diagonal matrix
+    '''
+    dim = len(unswapped_mat)
+    swapped_mat = np.zeros((dim,dim))
+
+    for i in range(dim):
+        for j in range(dim):
+            if unswapped_mat[j][i] != 0:
+                swapped_mat[i] = unswapped_mat[j]
+    
+    return swapped_mat
+
+
 def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=True, verbose=False) -> tuple[np.ndarray,
                                                                                            pytket.Circuit,
                                                                                            list[float],
                                                                                            list[dict[str, list[int | tuple[int, int]]]]]:
-    '''Full cZ measurement circuit
+    '''Full CZ measurement circuit
     
     Args:
         num_q: number of qubits
@@ -173,11 +229,16 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     z_submat = lin_indep_cols[0:n]
     x_submat = lin_indep_cols[n:]
     rows_to_rearr = np.array(extract_pivot_cols(x_submat.T, binary_gauss_elim(x_submat.T))[1], dtype=int)  # rows to swap to the top of X and Z submatrices (qubit swap)
+    # print("ROW SWAP 1 ON TOP NOW: ", rows_to_rearr)
     num_rearr_rows = len(rows_to_rearr)
     all_rows = np.arange(n)
     rows_not_rearr = np.setdiff1d(all_rows, rows_to_rearr).astype(int)
+    # print("ROW SWAP 1 AT BOTTOM NOW: ", rows_not_rearr)
     z_rearr = GF(z_submat[np.concatenate((rows_to_rearr, rows_not_rearr))].astype(int))
     x_rearr = GF(x_submat[np.concatenate((rows_to_rearr, rows_not_rearr))].astype(int))
+    swap_1_qubit_pairs = swap_pairs_from_top_bottom(rows_to_rearr.tolist(), rows_not_rearr.tolist())
+    # print("ROW SWAP 1 SWAP PAIRS: ", swap_1_qubit_pairs)
+    gates_to_apply.append({'SWAP': swap_1_qubit_pairs})
     
     # Apply Hadamards to non-pivot rows (swap rows of X and Z submatrices)
     z_sub_h = z_rearr.copy()[num_rearr_rows:]
@@ -193,8 +254,13 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     # Refind and reswap pivot rows to get fullrank upper submatrix
     rows_rearr_post_h = np.array(extract_pivot_cols(x_rearr.T, binary_gauss_elim(x_rearr.T))[1], dtype=int)
     rows_not_rearr_post_h = np.setdiff1d(all_rows, rows_rearr_post_h).astype(int)
+    # print("ROW SWAP 2 ON TOP NOW: ", rows_rearr_post_h)
+    # print("ROW SWAP 2 AT BOTTOM NOW: ", rows_not_rearr_post_h)
     z_re_rearr = GF(np.array(z_rearr[np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))]).astype(int))
     x_re_rearr = GF(np.array(x_rearr[np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))]).astype(int))
+    swap_2_qubit_pairs = swap_pairs_from_top_bottom(rows_rearr_post_h.tolist(), rows_not_rearr_post_h.tolist())
+    # print("ROW SWAP 2 SWAP PAIRS: ", swap_2_qubit_pairs)
+    gates_to_apply.append({'SWAP': swap_2_qubit_pairs})
     if verbose:
         print("S_1 after post-Hadamard rearrangement")
         print(z_re_rearr)
@@ -263,12 +329,12 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("R_inv")
         print(R_inv, "\n")
         
-    cZ_gates = []  # qubit pairs on which to apply cZ
+    CZ_gates = []  # qubit pairs on which to apply cZ
     for graph_row in range(1,n):
         for graph_col in range(graph_row):
             if S3R3[graph_row, graph_col] == 1:
-                cZ_gates.append((graph_row, graph_col))
-    gates_to_apply.append({'cZ': cZ_gates})
+                CZ_gates.append((graph_row, graph_col))
+    gates_to_apply.append({'CZ': CZ_gates})
     gates_to_apply.append({'H': np.arange(n).tolist()})
     if verbose:
         print("GATES TO APPLY")
@@ -284,55 +350,142 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
             elif gate_name == 'S':
                 for qubit in qubits:
                     msmt_circ.S(qubit)
-            elif gate_name == 'cZ':
-                for qubit1, qubit2 in qubits:
-                    msmt_circ.CZ(qubit1, qubit2)
+            elif gate_name == 'CZ':
+                for qubit_1, qubit_2 in qubits:
+                    msmt_circ.CZ(qubit_1, qubit_2)
+            elif gate_name == 'SWAP':
+                for qubit_1, qubit_2 in qubits:
+                    msmt_circ.SWAP(qubit_1, qubit_2)
 
     return (np.array(R_inv).T, msmt_circ, phases, gates_to_apply)
 
 
-# TESTING MODULE FOR USING MSMT CIRCUIT IN HADAMARD TEST
+# TESTING FOR USING MSMT CIRCUIT IN HADAMARD TEST
+# ---  USING H2, CHANGE BELOW IF USING DIFFERENT MOLECULE ---
+NUM_Q = 4  # excluding ancilla 
+COLLS = sorted_insertion("h2")  # excluding ancilla
+# ----------------------------------------------------------
+
+# -------------------- FIXED CONSTANTS ---------------------
+X = np.array([[0,1],[1,0]])
+Y = np.array([[0,-1j],[1j,0]])
+Z = np.array([[1,0],[0,-1]])
+I = np.eye(2)
+DIM = 2**NUM_Q
+ALL_DETS_BIN = [
+    [1 if i in powers_of_2(j) else 0 for i in range(NUM_Q+1)]
+    for j in range(2*DIM)
+]  # including ancilla
+# ----------------------------------------------------------
+
+def get_cz_msmt_data():
+    return [CZ_measurement(NUM_Q, coll) for coll in COLLS]
+
+def check_can_be_row_swapped_to_Zs(matrix: np.ndarray) -> bool:
+    M, N = matrix.shape
+    assert M == N
+
+    is_valid = True
+    for i in range(N):
+        one_count = 0
+        zero_count = 0
+        for j in range(N):
+            val = np.abs(matrix[i][j])
+            if val == 1:
+                one_count += 1
+            elif val == 0:
+                zero_count += 1
+        if one_count != 1 or zero_count != (N-1):
+            is_valid = False
+            break
+    
+    return is_valid
+
+
+# Example: use tensorproduct(Z,X,X,Y,Y) to get ndarray matrix for Pauli string ZXXYY
+def test_conjugate_pauli_with_msmt(msmt_circuit: pytket.Circuit, pstring: QubitOperator | np.ndarray, add_ancilla: bool, R_matrix_row: np.ndarray) -> tuple[np.ndarray]:
+    # if supplying pstring as QubitOperator (from COLLS, maybe), it will be normalised
+    # msmt_circuit and R_matrix_row can be obtained from get_cz_msmt_data()
+
+    if type(pstring) == QubitOperator:
+        coeff = list(pstring.terms.values())[0]
+        pstring_mat = qubit_operator_sparse(pstring, NUM_Q).toarray() / coeff
+    elif type(pstring) == np.ndarray:
+        pstring_mat = pstring
+
+    if add_ancilla:
+        pstring_mat = np.kron(Z, pstring_mat)
+    
+    msmt_mat = msmt_circuit.get_unitary()
+    conj_pauli = msmt_mat @ pstring_mat @ (msmt_mat.conj().T)
+
+    if not np.all(np.isreal(conj_pauli)):
+        print("Error: conjugated Pauli is not real")
+        return conj_pauli, pstring_mat
+    
+    Zs_mat_list = []
+    for qub in R_matrix_row:
+        if qub == 0:
+            Zs_mat_list.append(I)
+        else:
+            Zs_mat_list.append(Z)
+    Zs_mat = tensorproduct(*Zs_mat_list)
+
+    conj_pauli = np.round(conj_pauli.real, 2)  # round to 2 decimal places i.e. |tolerance| = 0.005 for diagonalisation
+    if np.all(Zs_mat == conj_pauli):
+        print("SUCCESS WITHOUT ROW SWAPS")
+        return conj_pauli
+    elif np.all(Zs_mat == (-1)*conj_pauli):
+        print("SUCCESS with phase = -1")
+        return conj_pauli, Zs_mat
+
+    if not check_can_be_row_swapped_to_Zs(conj_pauli):
+        print("Error: conjugated Pauli cannot be row-swapped into a valid matrix of Zs and Is")
+        return conj_pauli, pstring_mat
+    
+    diag_conj_pauli = swap_rows_diagonalise(conj_pauli)  # diagonalised by row swaps (require computation of full matrices so implausible)
+    if np.all(Zs_mat == diag_conj_pauli):
+        print("SUCCESS with row swaps")
+        return conj_pauli, diag_conj_pauli
+    elif np.all(Zs_mat == (-1)*diag_conj_pauli):
+        print("SUCCESS with row swaps and phase = -1")
+        return conj_pauli, diag_conj_pauli, Zs_mat
+
+    Zs_diag = np.diag(Zs_mat)
+    swapped_conj_pauli_diag = np.diag(diag_conj_pauli)
+    print("FAILURE")
+
+    return conj_pauli, swapped_conj_pauli_diag, Zs_diag
+    
+
 def idx_from_binary(bin: list[int]):
     sum = 0
     for i, val in enumerate(bin):
         sum += val * (2**i)
     return sum
 
-NUM_Q = 4
-DIM = 2**NUM_Q
-Z = np.array([[1,0],[0,-1]])
 
-statevec = [2*np.random.rand()-1 for _ in range(DIM)]  # pick a random real-coefficient statevector for testing, outside the function to prevent repicking
-statevec = np.array(statevec) / np.linalg.norm(statevec)
-def check_coeff(coll_idx, pstring_idx, det_idx, colls=None):
-    COLLS = sorted_insertion("h2") if not colls else colls
-    CZ_MSMT_DATA = [CZ_measurement(NUM_Q, coll) for coll in COLLS]
-    ALL_DETS_BIN = [
-        [1 if i in powers_of_2(j) else 0 for i in range(NUM_Q+1)]
-        for j in range(2*DIM)
-    ]
+def check_coeff(coll_idx, pstring_idx, det_idx):
+    CZ_MSMT_DATA = get_cz_msmt_data()
     COLL = COLLS[coll_idx]
     PSTRING = COLL[pstring_idx]
-    # print(PSTRING)
     PSTRING_COEFF = list(PSTRING.terms.values())[0]
-    # PSTRING = PSTRING / list(PSTRING.terms.values())[0]
     R, msmt_circ, _, _ = CZ_MSMT_DATA[coll_idx]
     msmt_circ_mat = msmt_circ.get_unitary()
-    # print(f"{det_idx}-TH COEFFICIENT OF STATEVECTOR: {statevec[det_idx]}")
+
+    statevec = [2*np.random.rand()-1 for _ in range(DIM)]  # pick a random real-coefficient statevector, put outside the function to prevent repicking
+    statevec = np.array(statevec) / np.linalg.norm(statevec)
 
     pstring_mat = qubit_operator_sparse(PSTRING, NUM_Q).toarray()
     correct_coeff = (pstring_mat @ statevec)[det_idx]
-    # print(f"CORRECT OVERLAP: {correct_coeff}")
 
     msmt_det_statevec = np.zeros(DIM)
     msmt_det_statevec[det_idx] = 1
     h_test_statevec = (0.5) * np.concatenate(((msmt_det_statevec+statevec), (msmt_det_statevec-statevec)))
     h_test_pstring_mat = np.kron(Z, pstring_mat)
     h_test_overlap = (h_test_statevec.conj()) @ h_test_pstring_mat @ h_test_statevec
-    # print(f"HADAMARD TEST OVERLAP: {h_test_overlap}")
 
     qubits_to_measure = [i for i in range(NUM_Q+1) if R[pstring_idx][i] == 1]
-    # print(f"QUBITS TO MEASURE: {qubits_to_measure}")
     xor_vals = []
     for det_bin in ALL_DETS_BIN:
         xor_val = 0
@@ -346,5 +499,4 @@ def check_coeff(coll_idx, pstring_idx, det_idx, colls=None):
     for idx, xor_val in enumerate(xor_vals):
         phase = (-1) ** (xor_val)
         msmt_coeff += phase * msmt_res_probs[idx] * PSTRING_COEFF
-    # print(f"MEASURED OVERLAP: {msmt_coeff}")
     return(correct_coeff, h_test_overlap, msmt_coeff)

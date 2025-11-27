@@ -143,7 +143,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         damping noise (bool): if True, apply damping noise after every UCC excitation operation
         damp_prob (float): damping noise probability
     '''
-
+    QWC = False
     #Map integers to occupation strings of the whole system + ancilla Hilbert space
     mapping = {det: utils.get_bits(det, nqubits +1) for det in range(2**(nqubits+1))}
     time1 = time.time()
@@ -159,7 +159,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     #Transform Hamiltonian into qubit basis and group
     qubit_h = jordan_wigner(ferm_hamil)
     ps_h = hamil.get_hamil_pauli_strings(qubit_h)
-    # groups = utils.group_pauli_strings(ps_h)
+    groups = utils.group_pauli_strings(ps_h)
     collections = sorted_insertion(fermi_hamil=ferm_hamil)
 
     dets.sort(key = lambda x: utils.dets_list_order(x, ref))
@@ -174,13 +174,14 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     ucc_circ = euw.generate_controlled_ucc_circ(nqubits, qubit_ops, params)
 
     if mats is None:
-        # mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE measurement circ and numbers
-        mats = hamil.get_hamil_si_collection_msmt_matrices(collections, nqubits)
-
-    mats_with_coeffs = [
-        (mat[0], mat[1], mat[2], collections[i])
-        for i, mat in enumerate(mats)
-    ]  # list of (collection msmt matrix, qubits to measure, phases, collection) for each collection
+        if QWC:
+            mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE measurement circ and numbers
+        else:
+            mats = hamil.get_hamil_si_collection_msmt_matrices(collections, nqubits)
+            mats_with_coeffs = [
+                (mat[0], mat[1], mat[2], collections[i])
+                for i, mat in enumerate(mats)
+            ]  # list of (collection msmt matrix, qubits to measure, phases, collection) for each collection
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:
@@ -388,7 +389,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         output_file.close()
     else:
         for step in range(nsteps+1):
-
+            if step%10 == 0:
+                print(f"STEP {step}")
             if stoch_wfn and (depolarising_noise or damping_noise):
                 param_map = get_stoch_wfn(pops, params, dets, ref,
                                           noise_symbols, noise_prob, damp_prob)
@@ -412,6 +414,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 groups_loc = get_stoch_hamil(keys, groups, nattempts, tot_weight,
                                             group_weights_cumul, group_weights)
             for det in dets:
+                if step%10 == 0:
+                    print(f"DET {det}")
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                         nqubits, current_ucc_circ)
                 if stoch_hamil:
@@ -420,10 +424,17 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap
                 else:
-                    # hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
-                    #                                               mats, mcirc, mapping)  # <phi_i | H | psi(beta)>
-                    hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, mcirc, mapping)
+                    hamil_overlap = 0
+                    if QWC:
+                        hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
+                                                                  mats, mcirc, mapping)  # <phi_i | H | psi(beta)>
+                    else:
+                        hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, mcirc, mapping)
+                    if step%10 == 0:
+                        print(f"HAMIL OVERLAP: {hamil_overlap}")
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)  # <phi_i | psi(beta)>
+                    if step%10 == 0:
+                        print(f"OVERLAP: {overlap}\n")
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap  # residual r_i
                 if det == ref:
                      e_proj = hamil_overlap/overlap - hf_e

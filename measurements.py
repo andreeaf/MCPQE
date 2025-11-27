@@ -3,6 +3,8 @@ import numpy as np
 import utils
 from pytket.extensions.qiskit import AerBackend, AerStateBackend
 from itertools import product
+from hamil_decomp_utils import tensorproduct
+from openfermion.linalg import qubit_operator_sparse
 
 def generate_hamil_overlap_measure_circuits(mcirc, ps_g, nqubits):
     backend = AerBackend()
@@ -88,6 +90,10 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
 
 
 def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False):
+    I = np.eye(2)
+    X = np.array([[0,1], [1,0]])
+    Y = np.array([[0,-1j], [1j, 0]])
+    Z = np.array([[1,0], [0,-1]])
     hamil_overlap = 0
     curr_statevector = mcirc.get_statevector()
 
@@ -97,13 +103,29 @@ def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0
         counts = get_counts(statevec, nshots, mapping, gaussian)
 
         for pauli_string, qubits_to_measure in list(zip(coll, qubits_to_measure_list)):
+            # qubit_parity_phase = 1 if len(qubits_to_measure)%2 == 0 else -1
+            Zs_mat = Z if 0 in qubits_to_measure else I
+            for i in range(1,5):
+                if i not in qubits_to_measure:
+                    Zs_mat = np.kron(Zs_mat, I)
+                else:
+                    Zs_mat = np.kron(Zs_mat, Z)
+            coeff = list(pauli_string.terms.values())[0]
+            norm_pauli_matrix = qubit_operator_sparse(pauli_string, 4).toarray()
+            norm_pauli_matrix = norm_pauli_matrix / coeff
+            norm_pauli_matrix = np.kron(Z, norm_pauli_matrix)  # add ancilla with Z into Pauli string
+            conj_pauli = msmt_mat @ norm_pauli_matrix @ (msmt_mat.conj().T)
+            qubit_parity_phase = np.round(conj_pauli[0][0]/Zs_mat[0][0])
+            # print(f"PHASE {qubit_parity_phase}")
+            # if qubit_parity_phase == 0:
+            #     print(pauli_string)
             coeff = list(pauli_string.terms.values())[0]
             for count in list(counts.keys()):
-                xor_val += 0
+                xor_val = 0
                 for measured_qubit_idx in qubits_to_measure:
                     xor_val = xor_val ^ count[measured_qubit_idx]
                 xor_phase = (-1) ** xor_val
-                hamil_overlap += coeff * xor_phase * counts[count]
+                hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
             
     return hamil_overlap
 

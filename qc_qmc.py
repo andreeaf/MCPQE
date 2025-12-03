@@ -143,7 +143,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         damping noise (bool): if True, apply damping noise after every UCC excitation operation
         damp_prob (float): damping noise probability
     '''
-    QWC = False
+    QWC = True
     #Map integers to occupation strings of the whole system + ancilla Hilbert space
     mapping = {det: utils.get_bits(det, nqubits +1) for det in range(2**(nqubits+1))}
     time1 = time.time()
@@ -389,7 +389,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         output_file.close()
     else:
         for step in range(nsteps+1):
-            if step%10 == 0:
+            if step%5 == 0:
                 print(f"STEP {step}")
             if stoch_wfn and (depolarising_noise or damping_noise):
                 param_map = get_stoch_wfn(pops, params, dets, ref,
@@ -414,8 +414,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 groups_loc = get_stoch_hamil(keys, groups, nattempts, tot_weight,
                                             group_weights_cumul, group_weights)
             for det in dets:
-                if step%10 == 0:
-                    print(f"DET {det}")
+                # if step%10 == 0:
+                #     print(f"DET {det}")
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                         nqubits, current_ucc_circ)
                 if stoch_hamil:
@@ -430,11 +430,11 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                                   mats, mcirc, mapping)  # <phi_i | H | psi(beta)>
                     else:
                         hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, mcirc, mapping)
-                    if step%10 == 0:
-                        print(f"HAMIL OVERLAP: {hamil_overlap}")
+                    # if step%10 == 0:
+                        # print(f"HAMIL OVERLAP: {hamil_overlap}")
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)  # <phi_i | psi(beta)>
-                    if step%10 == 0:
-                        print(f"OVERLAP: {overlap}\n")
+                    # if step%10 == 0:
+                        # print(f"OVERLAP: {overlap}\n")
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap  # residual r_i
                 if det == ref:
                      e_proj = hamil_overlap/overlap - hf_e

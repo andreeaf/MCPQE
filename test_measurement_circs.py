@@ -207,7 +207,7 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
         num_q += 1
 
-    bin_matrix, coeffs, phases = operator_binary_mapping(num_q, pauli_strings)
+    bin_matrix, _, phases = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
         print("S'_start")
         print(bin_matrix, "\n")
@@ -229,16 +229,12 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     z_submat = lin_indep_cols[0:n]
     x_submat = lin_indep_cols[n:]
     rows_to_rearr = np.array(extract_pivot_cols(x_submat.T, binary_gauss_elim(x_submat.T))[1], dtype=int)  # rows to swap to the top of X and Z submatrices (qubit swap)
-    # print("ROW SWAP 1 ON TOP NOW: ", rows_to_rearr)
     num_rearr_rows = len(rows_to_rearr)
     all_rows = np.arange(n)
     rows_not_rearr = np.setdiff1d(all_rows, rows_to_rearr).astype(int)
-    # print("ROW SWAP 1 AT BOTTOM NOW: ", rows_not_rearr)
-    z_rearr = GF(z_submat[np.concatenate((rows_to_rearr, rows_not_rearr))].astype(int))
-    x_rearr = GF(x_submat[np.concatenate((rows_to_rearr, rows_not_rearr))].astype(int))
-    swap_1_qubit_pairs = swap_pairs_from_top_bottom(rows_to_rearr.tolist(), rows_not_rearr.tolist())
-    # print("ROW SWAP 1 SWAP PAIRS: ", swap_1_qubit_pairs)
-    gates_to_apply.append({'SWAP': swap_1_qubit_pairs})
+    new_ordering_1 = np.concatenate((rows_to_rearr, rows_not_rearr))
+    z_rearr = GF(z_submat[new_ordering_1].astype(int))
+    x_rearr = GF(x_submat[new_ordering_1].astype(int))
     
     # Apply Hadamards to non-pivot rows (swap rows of X and Z submatrices)
     z_sub_h = z_rearr.copy()[num_rearr_rows:]
@@ -249,18 +245,15 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("S_1")
         print(z_rearr)
         print(x_rearr, "\n")
-    gates_to_apply.append({'H': rows_not_rearr})
+    gates_to_apply.append({'H': rows_not_rearr})  # rows_not_rearr corresponds to original qubit indexing
 
     # Refind and reswap pivot rows to get fullrank upper submatrix
     rows_rearr_post_h = np.array(extract_pivot_cols(x_rearr.T, binary_gauss_elim(x_rearr.T))[1], dtype=int)
-    rows_not_rearr_post_h = np.setdiff1d(all_rows, rows_rearr_post_h).astype(int)
-    # print("ROW SWAP 2 ON TOP NOW: ", rows_rearr_post_h)
-    # print("ROW SWAP 2 AT BOTTOM NOW: ", rows_not_rearr_post_h)
-    z_re_rearr = GF(np.array(z_rearr[np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))]).astype(int))
-    x_re_rearr = GF(np.array(x_rearr[np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))]).astype(int))
-    swap_2_qubit_pairs = swap_pairs_from_top_bottom(rows_rearr_post_h.tolist(), rows_not_rearr_post_h.tolist())
-    # print("ROW SWAP 2 SWAP PAIRS: ", swap_2_qubit_pairs)
-    gates_to_apply.append({'SWAP': swap_2_qubit_pairs})
+    rows_not_rearr_post_h = np.setdiff1d(all_rows, rows_rearr_post_h).astype(int)  # corresponds to qubit indexing after first rearrangement
+    new_ordering_2 = np.concatenate((rows_rearr_post_h, rows_not_rearr_post_h))
+    z_re_rearr = GF(np.array(z_rearr[new_ordering_2]).astype(int))
+    x_re_rearr = GF(np.array(x_rearr[new_ordering_2]).astype(int))
+    qubit_idx_mapping = [new_ordering_1[idx] for idx in new_ordering_2]
     if verbose:
         print("S_1 after post-Hadamard rearrangement")
         print(z_re_rearr)
@@ -313,10 +306,10 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("S_3 * R_3")
         print(S3R3, "\n")
 
-    phase_rows = []  # qubits on which to apply Phase gate
+    phase_rows = []  # qubits on which to apply Phase gate, corresponds to qubit indexing after both arrangements
     for row in range(n):
         if S3R3[row, row] == 1:
-            phase_rows.append(row)
+            phase_rows.append(qubit_idx_mapping[row])
             copy_S3R3 = S3R3.copy()
             new_row = copy_S3R3[row] ^ copy_S3R3[row + n]
             S3R3[row] = new_row
@@ -333,7 +326,7 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     for graph_row in range(1,n):
         for graph_col in range(graph_row):
             if S3R3[graph_row, graph_col] == 1:
-                CZ_gates.append((graph_row, graph_col))
+                CZ_gates.append((qubit_idx_mapping[graph_row], qubit_idx_mapping[graph_col]))
     gates_to_apply.append({'CZ': CZ_gates})
     gates_to_apply.append({'H': np.arange(n).tolist()})
     if verbose:
@@ -353,11 +346,12 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
             elif gate_name == 'CZ':
                 for qubit_1, qubit_2 in qubits:
                     msmt_circ.CZ(qubit_1, qubit_2)
-            elif gate_name == 'SWAP':
-                for qubit_1, qubit_2 in qubits:
-                    msmt_circ.SWAP(qubit_1, qubit_2)
 
-    return (np.array(R_inv).T, msmt_circ, phases, gates_to_apply)
+    R_inv_rearr = [[] for _ in range(num_q)]
+    for rearr_idx, actual_idx in enumerate(qubit_idx_mapping):
+        R_inv_rearr[actual_idx] = R_inv[rearr_idx]
+    
+    return (np.array(R_inv_rearr).T, msmt_circ, phases, gates_to_apply)
 
 
 # TESTING FOR USING MSMT CIRCUIT IN HADAMARD TEST
@@ -380,6 +374,15 @@ ALL_DETS_BIN = [
 
 def get_cz_msmt_data():
     return [CZ_measurement(NUM_Q, coll) for coll in COLLS]
+
+def determine_Zs(diag_elems: np.array, num_q: int):
+    assert len(diag_elems) == 2**num_q
+    Z_qubs = []
+    for qub_idx in range(num_q):
+        if diag_elems[2**(num_q-1-qub_idx)]*diag_elems[0] == -1:
+            Z_qubs.append(qub_idx)
+    
+    return Z_qubs
 
 def check_can_be_row_swapped_to_Zs(matrix: np.ndarray) -> bool:
     M, N = matrix.shape

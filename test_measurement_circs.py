@@ -17,12 +17,11 @@ def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]) -> t
         pauli_strings: list of Pauli strings
     
     Returns:
-        (binary matrix, coefficients of Pauli strings, phases = list of (-1)^(number of Y in string))
+        (binary matrix, coefficients of Pauli strings)
     '''
 
     bin_matrix = np.zeros(shape=(2*num_q, len(pauli_strings)))
     coeffs = []
-    phases = []
     
     for idx, pauli_string in enumerate(pauli_strings):
         y_count = 0
@@ -39,10 +38,9 @@ def operator_binary_mapping(num_q: int, pauli_strings: list[QubitOperator]) -> t
                         bin_matrix[act_qubit, idx] = 1
                         bin_matrix[act_qubit+num_q, idx] = 1
                         y_count += 1
-        phases.append((-1) ** y_count)
         coeffs.append(list(pauli_string.terms.values())[0])
 
-    return (bin_matrix, coeffs, phases)
+    return (bin_matrix, coeffs)
 
 
 def binary_gauss_elim(bin_matrix: np.ndarray) -> np.ndarray:
@@ -185,6 +183,45 @@ def swap_rows_diagonalise(unswapped_mat: np.ndarray) -> np.ndarray:
     return swapped_mat
 
 
+def get_conj_table() -> dict:
+    # dict of M: P: (phase, |M_dag * P * M|)
+
+    conj_table = {
+        'H': {
+            'I': (1, 'I'),
+            'X': (1, 'X'),
+            'Y': (-1, 'Y'),
+            'Z': (1, 'Z')
+        }, 
+        'CZ': {
+            ('I', 'I'): (1, ('I', 'I')),
+            ('I', 'X'): (1, ('Z', 'X')),
+            ('I', 'Y'): (1, ('Z', 'Y')),
+            ('I', 'Z'): (1, ('Z', 'I')),
+            ('X', 'I'): (1, ('X', 'Z')),
+            ('X', 'X'): (1, ('Y', 'Y')),
+            ('X', 'Y'): (-1, ('Y', 'X')),
+            ('X', 'Z'): (1, ('X', 'I')), 
+            ('Y', 'I'): (1, ('Y', 'Z')),
+            ('Y', 'X'): (-1, ('X', 'Y')),
+            ('Y', 'Y'): (1, ('X', 'X')), 
+            ('Y', 'Z'): (1, ('Y', 'I')), 
+            ('Z', 'I'): (1, ('I', 'Z')), 
+            ('Z', 'X'): (1, ('I', 'X')), 
+            ('Z', 'Y'): (1, ('I', 'Y')),
+            ('Z', 'Z'): (1, ('Z', 'Z'))
+        }, 
+        'S': {
+            'I': (1, 'I'),
+            'X': (-1, 'Y'),
+            'Y': (-1, 'X'),
+            'Z': (1, 'Z')
+        }
+    }
+
+    return conj_table
+
+
 def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=True, verbose=False) -> tuple[np.ndarray,
                                                                                            pytket.Circuit,
                                                                                            list[float],
@@ -207,7 +244,7 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         pauli_strings = [add_ancilla_Z(op) for op in pauli_strings]
         num_q += 1
 
-    bin_matrix, _, phases = operator_binary_mapping(num_q, pauli_strings)
+    bin_matrix, _ = operator_binary_mapping(num_q, pauli_strings)
     if verbose:
         print("S'_start")
         print(bin_matrix, "\n")
@@ -350,8 +387,26 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     R_inv_rearr = [[] for _ in range(num_q)]
     for rearr_idx, actual_idx in enumerate(qubit_idx_mapping):
         R_inv_rearr[actual_idx] = R_inv[rearr_idx]
+
+    R_inv_transpose = np.array(R_inv_rearr).T
+    msmt_mat = msmt_circ.get_unitary()
+
+    X = np.array([[0,1],[1,0]])
+    Y = np.array([[0,-1j],[1j,0]])
+    Z = np.array([[1,0],[0,-1]])
+    I = np.eye(2)
+    phases = []
+    for idx, pstring in enumerate(pauli_strings):
+        pauli_mat = qubit_operator_sparse(pstring, num_q).toarray()
+        norm_pauli_mat = pauli_mat / list(pstring.terms.values())[0]
+        Zs_mat = tensorproduct(*tuple(map(lambda x: Z if x == 1 else I, R_inv_transpose[idx])))
+        conj_pauli_mat = np.round(msmt_mat @ norm_pauli_mat @ (msmt_mat.conj().T), 3).real
+        phase = np.round(conj_pauli_mat[0][0] / Zs_mat[0][0]).real
+        if not np.all(phase*conj_pauli_mat == Zs_mat):
+            print("ERROR IN PHASE OF PAULI STRING MEASUREMENT!")
+        phases.append(phase)
     
-    return (np.array(R_inv_rearr).T, msmt_circ, phases, gates_to_apply)
+    return (R_inv_transpose, msmt_circ, phases, gates_to_apply)
 
 
 # TESTING FOR USING MSMT CIRCUIT IN HADAMARD TEST

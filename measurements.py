@@ -68,7 +68,7 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
     hamil_elem = 0
     for pauli_group, mat in mats.items():
         if pauli_group in ps_g:
-            vector = mcirc.get_statevector()
+            vector = mcirc.get_statevector()  # MOVE OUTSIDIE LOOP
             vector = mat.dot(vector)
             counts = get_counts(vector, nshots, mapping, gaussian)
             for pauli_str in ps_g[pauli_group]:
@@ -98,29 +98,11 @@ def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0
     curr_statevector = mcirc.get_statevector()
 
     for coll_msmt_inputs in mats_with_coeffs:
-        msmt_mat, qubits_to_measure_list, _, coll = coll_msmt_inputs
+        msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
         statevec = msmt_mat.dot(curr_statevector)
         counts = get_counts(statevec, nshots, mapping, gaussian)
 
-        for pauli_string, qubits_to_measure in list(zip(coll, qubits_to_measure_list)):
-            # print(pauli_string, qubits_to_measure)
-            Zs_mat = Z if 0 in qubits_to_measure else I
-            for i in range(1,num_q+1):
-                if i not in qubits_to_measure:
-                    Zs_mat = np.kron(Zs_mat, I)
-                else:
-                    Zs_mat = np.kron(Zs_mat, Z)
-            coeff = list(pauli_string.terms.values())[0]
-            norm_pauli_matrix = qubit_operator_sparse(pauli_string, num_q).toarray()
-            norm_pauli_matrix = norm_pauli_matrix / coeff
-            norm_pauli_matrix = np.kron(Z, norm_pauli_matrix)  # add ancilla with Z into Pauli string
-            conj_pauli = np.round(msmt_mat @ norm_pauli_matrix @ (msmt_mat.conj().T), 3).real
-            qubit_parity_phase = np.round(conj_pauli[0][0]/Zs_mat[0][0])
-            if not (np.all(conj_pauli == qubit_parity_phase.real * Zs_mat)):
-                print("FAILURE 1", pauli_string, qubits_to_measure)
-            # print(f"PHASE {qubit_parity_phase}")
-            if qubit_parity_phase == 0:
-                print("FAILURE 2", pauli_string, qubits_to_measure)
+        for pauli_string, qubits_to_measure, qubit_parity_phase in list(zip(coll, qubits_to_measure_list, phases)):
             coeff = list(pauli_string.terms.values())[0]
             for count in list(counts.keys()):
                 xor_val = 0

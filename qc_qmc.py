@@ -110,7 +110,7 @@ def spawn(apply_mats, ucc_circ, param_map, dets, nqubits, ref, mapping, spawned_
     return operators, qubit_ops, params, ucc_circ, param_map, signs
 
 
-def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, nsteps,
+def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, nsteps, coll_method,
                dets = None, stoch_hamil = False, sym = None, shots = False, nattempts = 1,
                stoch_wfn = False, mats = None, apply_mats=None,
                depolarising_noise=False, noise_prob=0, gaussian_noise=False, damping_noise=False,
@@ -126,6 +126,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         pop_thresh (int): population threshold.
         filename (str): output file.
         nsteps (int): number of QMC steps.
+        coll_method (str): Hamiltonian collection method (QWC or SI)
         dets (list): occupation list for determinants in UCC ansatz.
         stoch_hamil (bool): if True sample the Hamiltonian.
         sym (bool): if True
@@ -143,7 +144,13 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         damping noise (bool): if True, apply damping noise after every UCC excitation operation
         damp_prob (float): damping noise probability
     '''
-    QWC = True
+    QWC: bool
+    if coll_method.lower() == "qwc":
+        QWC = True
+        print("QWC")
+    else:
+        QWC = False
+        print("SI")
     #Map integers to occupation strings of the whole system + ancilla Hilbert space
     mapping = {det: utils.get_bits(det, nqubits +1) for det in range(2**(nqubits+1))}
     time1 = time.time()

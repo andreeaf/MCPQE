@@ -189,9 +189,9 @@ def get_conj_table() -> dict:
     conj_table = {
         'H': {
             'I': (1, 'I'),
-            'X': (1, 'X'),
+            'X': (1, 'Z'),
             'Y': (-1, 'Y'),
-            'Z': (1, 'Z')
+            'Z': (1, 'X')
         }, 
         'CZ': {
             ('I', 'I'): (1, ('I', 'I')),
@@ -282,7 +282,7 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         print("S_1")
         print(z_rearr)
         print(x_rearr, "\n")
-    gates_to_apply.append({'H': rows_not_rearr})  # rows_not_rearr corresponds to original qubit indexing
+    gates_to_apply.append({'H': rows_not_rearr.tolist()})  # rows_not_rearr corresponds to original qubit indexing
 
     # Refind and reswap pivot rows to get fullrank upper submatrix
     rows_rearr_post_h = np.array(extract_pivot_cols(x_rearr.T, binary_gauss_elim(x_rearr.T))[1], dtype=int)
@@ -389,21 +389,30 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
         R_inv_rearr[actual_idx] = R_inv[rearr_idx]
 
     R_inv_transpose = np.array(R_inv_rearr).T
-    msmt_mat = msmt_circ.get_unitary()
 
-    X = np.array([[0,1],[1,0]])
-    Y = np.array([[0,-1j],[1j,0]])
-    Z = np.array([[1,0],[0,-1]])
-    I = np.eye(2)
+    CONJ_TABLE = get_conj_table()
     phases = []
-    for idx, pstring in enumerate(pauli_strings):
-        pauli_mat = qubit_operator_sparse(pstring, num_q).toarray()
-        norm_pauli_mat = pauli_mat / list(pstring.terms.values())[0]
-        Zs_mat = tensorproduct(*tuple(map(lambda x: Z if x == 1 else I, R_inv_transpose[idx])))
-        conj_pauli_mat = np.round(msmt_mat @ norm_pauli_mat @ (msmt_mat.conj().T), 3).real
-        phase = np.round(conj_pauli_mat[0][0] / Zs_mat[0][0]).real
-        if not np.all(phase*conj_pauli_mat == Zs_mat):
-            print("ERROR IN PHASE OF PAULI STRING MEASUREMENT!")
+    msmt_gates_rev = gates_to_apply[::-1]
+    for R_row in R_inv_transpose:
+        trf_paulis = list(map(lambda x: "Z" if x == 1 else "I", R_row))
+        phase = 1
+        for gate_dict in msmt_gates_rev:
+            gate, app_qubits = list(gate_dict.items())[0]
+            if len(app_qubits) == 0:
+                continue
+            if gate == "CZ":
+                for app_qubit_pair in app_qubits:
+                    app_qubit1, app_qubit2 = app_qubit_pair
+                    app_gate_pair = (trf_paulis[app_qubit1], trf_paulis[app_qubit2])
+                    res_phase, res_gates = CONJ_TABLE['CZ'][app_gate_pair]
+                    phase *= res_phase
+                    trf_paulis[app_qubit1] = res_gates[0]
+                    trf_paulis[app_qubit2] = res_gates[1]
+            else:
+                for app_qubit in app_qubits:
+                    res_phase, res_gate = CONJ_TABLE[gate][trf_paulis[app_qubit]]
+                    phase *= res_phase
+                    trf_paulis[app_qubit] = res_gate
         phases.append(phase)
     
     return (R_inv_transpose, msmt_circ, phases, gates_to_apply)

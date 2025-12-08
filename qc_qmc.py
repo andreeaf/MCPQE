@@ -250,6 +250,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     #Open output file
     output_file = open(filename, 'a', encoding="utf-8")
     output_file.write('Starting QMC \n')
+    output_file.write(f"Collection method: {coll_method}\n")
     output_file.write('step      S         E_proj        N0         N_tot       Ni/N0\n')
     e_proj = 0
 
@@ -396,7 +397,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         output_file.close()
     else:
         for step in range(nsteps+1):
-            if step%5 == 0:
+            if step%10 == 0:
                 print(f"STEP {step}")
             if stoch_wfn and (depolarising_noise or damping_noise):
                 param_map = get_stoch_wfn(pops, params, dets, ref,

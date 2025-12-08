@@ -68,7 +68,7 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
     hamil_elem = 0
     for pauli_group, mat in mats.items():
         if pauli_group in ps_g:
-            vector = mcirc.get_statevector()  # MOVE OUTSIDIE LOOP
+            vector = mcirc.get_statevector()
             vector = mat.dot(vector)
             counts = get_counts(vector, nshots, mapping, gaussian)
             for pauli_str in ps_g[pauli_group]:

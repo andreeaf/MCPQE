@@ -90,6 +90,7 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
 
 
 def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False):
+    '''Sorted insertion <phi_i|H|Psi> term'''
     I = np.eye(2)
     X = np.array([[0,1], [1,0]])
     Y = np.array([[0,-1j], [1j, 0]])
@@ -109,8 +110,11 @@ def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0
                 for measured_qubit_idx in qubits_to_measure:
                     xor_val = xor_val ^ count[measured_qubit_idx]
                 xor_phase = (-1) ** xor_val
-                hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
-            
+                if nshots != 0:
+                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
+                else:
+                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
+                
     return hamil_overlap
 
 

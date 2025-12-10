@@ -80,4 +80,4 @@ molecule = run_pyscf(molecule, run_scf=1, run_fci=1)
 ferm_h = normal_ordered(get_fermion_operator(molecule.get_molecular_hamiltonian()))#occupied_indices = [0], active_indices = [1,2,3,4,5,6])))
 
 print(filename)
-qc_qmc.qc_qmc_ucc(ferm_h, ref, hf_e, args.nqubits, args.dt, args.pop_thresh, filename, nsteps = args.nsteps, coll_method=args.coll_method, shots = args.nshots, dets=dets, gaussian_noise = args.gaussian_noise, stoch_hamil=args.stoch_hamil, nattempts=args.nattempts)
+qc_qmc.qc_qmc_ucc(ferm_h, ref, hf_e, args.nqubits, args.dt, args.pop_thresh, filename, nsteps=args.nsteps, coll_method=args.coll_method, shots=args.nshots, dets=dets, gaussian_noise=args.gaussian_noise, stoch_hamil=args.stoch_hamil, nattempts=args.nattempts)

@@ -261,6 +261,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         sys.exit()
     if shots and not gaussian_noise:
         for step in range(nsteps+1):
+            if step%10 == 0:
+                print(f"STEP {step}")
             e_proj = 0
             ov_proj = 0
             if stoch_wfn and (depolarising_noise or damping_noise):
@@ -290,8 +292,11 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups_loc,
                                                                     mats, mcirc, mapping, shots)
                 else:
-                    hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups, mats,
-                                                                    mcirc, mapping, shots)
+                    if QWC:
+                        hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups, mats,
+                                                                        mcirc, mapping, shots)
+                    else:
+                        hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, mcirc, mapping, shots)
                 overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, shots)
                 hamil_term = pops[ref]*(hamil_overlap - (shift + hf_e) * overlap)
                 if det == ref:
@@ -317,9 +322,12 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
             if sum(abs(pops[x]) for x in pops) >= pop_thresh and not vary_shift:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref, nqubits,
                                                                           current_ucc_circ)
-                shift = measurements.measure_hamil_overlap_groups_matrices(groups, mats, mcirc,
-                                mapping, shots)/measurements.measure_overlap_shots_mat(mcirc,
-                                                    mapping, shots) - hf_e
+                if QWC:
+                    shift = measurements.measure_hamil_overlap_groups_matrices(groups, mats, mcirc,
+                                    mapping, shots)/measurements.measure_overlap_shots_mat(mcirc,
+                                                        mapping, shots) - hf_e
+                else:
+                    shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, mcirc, mapping, shots)/measurements.measure_overlap_shots_mat(mcirc, mapping, shots) - hf_e
                 vary_shift = True
                 step_0 = step
                 pop_old = sum(abs(pops[x]) for x in pops)

@@ -89,18 +89,60 @@ def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0
     return hamil_elem
 
 
-def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False):
+def get_resvars(num_q, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False, shot_split=None):
+    curr_statevector = mcirc.get_statevector()
+    resvars = []
+
+    for idx, coll_msmt_inputs in enumerate(mats_with_coeffs):
+        hamil_overlap = 0
+        msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
+        sq_msmt_mat, sq_qubits_to_measure_list, sq_phases, sq_coeffs, iden_term = sq_mats_with_coeffs[idx]
+        sq_hamil_overlap = iden_term
+        statevec = msmt_mat.dot(curr_statevector)
+        sq_statevec = sq_msmt_mat.dot(curr_statevector)
+        if shot_split:
+            nshots = shot_split[idx]
+        counts = get_counts(statevec, nshots, mapping, gaussian)
+        sq_counts = get_counts(sq_statevec, nshots, mapping, gaussian)
+
+        for pauli_string, qubits_to_measure, qubit_parity_phase in zip(coll, qubits_to_measure_list, phases):
+            coeff = list(pauli_string.terms.values())[0]
+            for count in counts.keys():
+                xor_val = 0
+                for measured_qubit_idx in qubits_to_measure:
+                    xor_val = xor_val ^ count[measured_qubit_idx]
+                xor_phase = (-1) ** xor_val
+                if nshots != 0:
+                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
+                else:
+                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
+
+        for sq_qubits_to_measure, sq_qubit_parity_phase, sq_coeff in zip(sq_qubits_to_measure_list, sq_phases, sq_coeffs):
+            for sq_count in sq_counts.keys():
+                sq_xor_val = 0
+                for sq_msd_qubit_idx in sq_qubits_to_measure:
+                    sq_xor_val = sq_xor_val ^ sq_count[sq_msd_qubit_idx]
+                sq_xor_phase = (-1) ** sq_xor_val
+                if nshots != 0:
+                    sq_hamil_overlap += sq_coeff * sq_xor_phase * sq_qubit_parity_phase * sq_counts[sq_count]/nshots
+                else:
+                    sq_hamil_overlap += sq_coeff * sq_xor_phase * sq_qubit_parity_phase * sq_counts[sq_count]
+
+        resvars.append(sq_hamil_overlap - hamil_overlap**2)
+
+    return resvars
+
+
+def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False, shot_split=None):
     '''Sorted insertion <phi_i|H|Psi> term'''
-    I = np.eye(2)
-    X = np.array([[0,1], [1,0]])
-    Y = np.array([[0,-1j], [1j, 0]])
-    Z = np.array([[1,0], [0,-1]])
     hamil_overlap = 0
     curr_statevector = mcirc.get_statevector()
 
-    for coll_msmt_inputs in mats_with_coeffs:
+    for coll_idx, coll_msmt_inputs in enumerate(mats_with_coeffs):
         msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
         statevec = msmt_mat.dot(curr_statevector)
+        if shot_split:
+            nshots = shot_split[coll_idx]
         counts = get_counts(statevec, nshots, mapping, gaussian)
 
         for pauli_string, qubits_to_measure, qubit_parity_phase in list(zip(coll, qubits_to_measure_list, phases)):

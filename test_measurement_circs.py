@@ -5,6 +5,7 @@ from openfermion import QubitOperator
 from openfermion.linalg import qubit_operator_sparse
 from hamil_decomps import qubitwise_comm, sorted_insertion
 from hamil_decomp_utils import powers_of_2, tensorproduct
+from itertools import combinations
 
 # --- Measurement circuit generation for a collection of commuting Paulis ---
 
@@ -418,152 +419,34 @@ def CZ_measurement(num_q: int, pauli_strings: list[QubitOperator], add_ancilla=T
     return (R_inv_transpose, msmt_circ, phases, gates_to_apply)
 
 
-# TESTING FOR USING MSMT CIRCUIT IN HADAMARD TEST
-# ---  USING H2, CHANGE BELOW IF USING DIFFERENT MOLECULE ---
-NUM_Q = 4  # excluding ancilla 
-COLLS = sorted_insertion("h2")  # excluding ancilla
-# ----------------------------------------------------------
-
-# -------------------- FIXED CONSTANTS ---------------------
-X = np.array([[0,1],[1,0]])
-Y = np.array([[0,-1j],[1j,0]])
-Z = np.array([[1,0],[0,-1]])
-I = np.eye(2)
-DIM = 2**NUM_Q
-ALL_DETS_BIN = [
-    [1 if i in powers_of_2(j) else 0 for i in range(NUM_Q+1)]
-    for j in range(2*DIM)
-]  # including ancilla
-# ----------------------------------------------------------
-
-def get_cz_msmt_data():
-    return [CZ_measurement(NUM_Q, coll) for coll in COLLS]
-
-def determine_Zs(diag_elems: np.array, num_q: int):
-    assert len(diag_elems) == 2**num_q
-    Z_qubs = []
-    for qub_idx in range(num_q):
-        if diag_elems[2**(num_q-1-qub_idx)]*diag_elems[0] == -1:
-            Z_qubs.append(qub_idx)
+def resvar_sq_term_msmt(num_q: int, pauli_strings: list[QubitOperator]):
+    '''
+    | Computes measurement circuit to obtain first term in resvar of given collection (matrix representation D)
+    | = E((Z tensor D)^2)
+    | = sum_{i}{coeffs^2 of Pauli strings} + sum_{i, j}{2*(c_i)*(c_j) * E(I tensor (Pauli string i * Pauli string j))} (i != j, mutually commuting Pauli strings)
+    | := iden_term + measured_terms
     
-    return Z_qubs
-
-def check_can_be_row_swapped_to_Zs(matrix: np.ndarray) -> bool:
-    M, N = matrix.shape
-    assert M == N
-
-    is_valid = True
-    for i in range(N):
-        one_count = 0
-        zero_count = 0
-        for j in range(N):
-            val = np.abs(matrix[i][j])
-            if val == 1:
-                one_count += 1
-            elif val == 0:
-                zero_count += 1
-        if one_count != 1 or zero_count != (N-1):
-            is_valid = False
-            break
+    Args:
+        num_q: number of qubits
+        pauli_strings: list of commuting collection of Pauli strings
     
-    return is_valid
+    Returns:
+        (iden_term, R matrix, measurement circuit (pytket), phases, [2*(c_i)*(c_j)] for measured_terms)
+    '''
+    coeffs = [list(pstring.terms.values())[0] for pstring in pauli_strings]
+    iden_term = np.sum(np.square(np.real(coeffs)))
 
+    product_coeffs = []  # [2*c_i*c_j for i != j]
+    product_coll = []
+    for idx1, idx2 in combinations(range(len(pauli_strings)), 2):
+        product_coeffs.append(2*coeffs[idx1]*coeffs[idx2])
+        product_pauli_op = pauli_strings[idx1] * pauli_strings[idx2]
+        new_term_str = ""
+        for pauli_str in product_pauli_op.terms.keys():
+            for qubit_idx, gate in pauli_str:
+                new_term_str += f" {gate}{qubit_idx+1}"
+        
+        product_coll.append(QubitOperator(new_term_str))
+    R_mat, msmt_circ, phases, _ = CZ_measurement(num_q+1, product_coll, False)
 
-# Example: use tensorproduct(Z,X,X,Y,Y) to get ndarray matrix for Pauli string ZXXYY
-def test_conjugate_pauli_with_msmt(msmt_circuit: pytket.Circuit, pstring: QubitOperator | np.ndarray, add_ancilla: bool, R_matrix_row: np.ndarray) -> tuple[np.ndarray]:
-    # if supplying pstring as QubitOperator (from COLLS, maybe), it will be normalised
-    # msmt_circuit and R_matrix_row can be obtained from get_cz_msmt_data()
-
-    if type(pstring) == QubitOperator:
-        coeff = list(pstring.terms.values())[0]
-        pstring_mat = qubit_operator_sparse(pstring, NUM_Q).toarray() / coeff
-    elif type(pstring) == np.ndarray:
-        pstring_mat = pstring
-
-    if add_ancilla:
-        pstring_mat = np.kron(Z, pstring_mat)
-    
-    msmt_mat = msmt_circuit.get_unitary()
-    conj_pauli = msmt_mat @ pstring_mat @ (msmt_mat.conj().T)
-
-    if not np.all(np.isreal(conj_pauli)):
-        print("Error: conjugated Pauli is not real")
-        return conj_pauli, pstring_mat
-    
-    Zs_mat_list = []
-    for qub in R_matrix_row:
-        if qub == 0:
-            Zs_mat_list.append(I)
-        else:
-            Zs_mat_list.append(Z)
-    Zs_mat = tensorproduct(*Zs_mat_list)
-
-    conj_pauli = np.round(conj_pauli.real, 2)  # round to 2 decimal places i.e. |tolerance| = 0.005 for diagonalisation
-    if np.all(Zs_mat == conj_pauli):
-        print("SUCCESS WITHOUT ROW SWAPS")
-        return conj_pauli
-    elif np.all(Zs_mat == (-1)*conj_pauli):
-        print("SUCCESS with phase = -1")
-        return conj_pauli, Zs_mat
-
-    if not check_can_be_row_swapped_to_Zs(conj_pauli):
-        print("Error: conjugated Pauli cannot be row-swapped into a valid matrix of Zs and Is")
-        return conj_pauli, pstring_mat
-    
-    diag_conj_pauli = swap_rows_diagonalise(conj_pauli)  # diagonalised by row swaps (require computation of full matrices so implausible)
-    if np.all(Zs_mat == diag_conj_pauli):
-        print("SUCCESS with row swaps")
-        return conj_pauli, diag_conj_pauli
-    elif np.all(Zs_mat == (-1)*diag_conj_pauli):
-        print("SUCCESS with row swaps and phase = -1")
-        return conj_pauli, diag_conj_pauli, Zs_mat
-
-    Zs_diag = np.diag(Zs_mat)
-    swapped_conj_pauli_diag = np.diag(diag_conj_pauli)
-    print("FAILURE")
-
-    return conj_pauli, swapped_conj_pauli_diag, Zs_diag
-    
-
-def idx_from_binary(bin: list[int]):
-    sum = 0
-    for i, val in enumerate(bin):
-        sum += val * (2**i)
-    return sum
-
-
-def check_coeff(coll_idx, pstring_idx, det_idx):
-    CZ_MSMT_DATA = get_cz_msmt_data()
-    COLL = COLLS[coll_idx]
-    PSTRING = COLL[pstring_idx]
-    PSTRING_COEFF = list(PSTRING.terms.values())[0]
-    R, msmt_circ, _, _ = CZ_MSMT_DATA[coll_idx]
-    msmt_circ_mat = msmt_circ.get_unitary()
-
-    statevec = [2*np.random.rand()-1 for _ in range(DIM)]  # pick a random real-coefficient statevector, put outside the function to prevent repicking
-    statevec = np.array(statevec) / np.linalg.norm(statevec)
-
-    pstring_mat = qubit_operator_sparse(PSTRING, NUM_Q).toarray()
-    correct_coeff = (pstring_mat @ statevec)[det_idx]
-
-    msmt_det_statevec = np.zeros(DIM)
-    msmt_det_statevec[det_idx] = 1
-    h_test_statevec = (0.5) * np.concatenate(((msmt_det_statevec+statevec), (msmt_det_statevec-statevec)))
-    h_test_pstring_mat = np.kron(Z, pstring_mat)
-    h_test_overlap = (h_test_statevec.conj()) @ h_test_pstring_mat @ h_test_statevec
-
-    qubits_to_measure = [i for i in range(NUM_Q+1) if R[pstring_idx][i] == 1]
-    xor_vals = []
-    for det_bin in ALL_DETS_BIN:
-        xor_val = 0
-        for qub_idx in qubits_to_measure:
-            xor_val = xor_val ^ det_bin[qub_idx]
-        xor_vals.append(xor_val)
-    
-    msmt_res_statevec = msmt_circ_mat @ h_test_statevec
-    msmt_res_probs = np.multiply(msmt_res_statevec.conj(), msmt_res_statevec).real
-    msmt_coeff = 0
-    for idx, xor_val in enumerate(xor_vals):
-        phase = (-1) ** (xor_val)
-        msmt_coeff += phase * msmt_res_probs[idx] * PSTRING_COEFF
-    return(correct_coeff, h_test_overlap, msmt_coeff)
+    return (iden_term, R_mat, msmt_circ, phases, product_coeffs)

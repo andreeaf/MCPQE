@@ -113,9 +113,11 @@ def get_resvars(num_q, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, ns
                     xor_val = xor_val ^ count[measured_qubit_idx]
                 xor_phase = (-1) ** xor_val
                 if nshots != 0:
-                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
+                    # hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
+                    hamil_overlap += coeff * qubit_parity_phase * counts[count]/nshots
                 else:
-                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
+                    # hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
+                    hamil_overlap += coeff * qubit_parity_phase * counts[count]
 
         for sq_qubits_to_measure, sq_qubit_parity_phase, sq_coeff in zip(sq_qubits_to_measure_list, sq_phases, sq_coeffs):
             for sq_count in sq_counts.keys():

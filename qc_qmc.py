@@ -152,6 +152,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     else:
         QWC = False
         print("SI")
+
     #Map integers to occupation strings of the whole system + ancilla Hilbert space
     mapping = {det: utils.get_bits(det, nqubits +1) for det in range(2**(nqubits+1))}
     time1 = time.time()
@@ -183,7 +184,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
     if mats is None:
         if QWC:
-            mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')  # CHANGE measurement circ and numbers
+            mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')
+
         else:
             mats = hamil.get_hamil_si_collection_msmt_matrices(collections, nqubits)
             mats_with_coeffs = [
@@ -191,6 +193,11 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 for i, mat in enumerate(mats)
             ]  # list of (collection msmt matrix, qubits to measure, phases, collection) for each collection
             sq_mats_with_coeffs = hamil.get_hamil_sq_si_collection_msmt_matrices(collections, nqubits)  #list of (msmt circuit matrix, qubits to measure, phases, coeffs, identity term) for each collection
+
+    num_colls = len(mats)
+    if total_shots and not shots:
+        # shots used to get initial measurement split
+        shots = int(np.ceil(total_shots/num_colls))
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:
@@ -256,7 +263,6 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     output_file.write('step      S         E_proj        N0         N_tot       Ni/N0\n')
     e_proj = 0
 
-
     #Do QMC
     if (not shots) and gaussian_noise:
         print('Invalid parameters. Asked for Gaussian noise but no number of shots provided.')
@@ -289,21 +295,23 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 groups_loc = get_stoch_hamil(keys, groups, nattempts,
                                              tot_weight, group_weights_cumul, group_weights)
 
-            # msmt_split = [48000, 2000]  # hardcode for testing
+            # MEASUREMENT SPLITTING METHODS
 
+            # 1. HARDCODED
+            # msmt_split = [20000, 30000]
+
+
+            # 2. ALL DETS, RESVAR SUM OVER COLLECTIONS WEIGHTED BY |RESIDUAL|
             if step == 0 and (not QWC) and (not stoch_hamil) and total_shots:
                 resvars = []
                 for det in dets:
                     mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                                         nqubits, current_ucc_circ)
-                    # print(det)
                     det_resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
-                    # print(det_resvars)
                     resvars.append(det_resvars)
                 resvar_sum = np.sum(np.array(resvars), axis=0)
                 msmt_split = np.ceil(total_shots * resvar_sum / np.sum(resvar_sum)).astype(int).tolist()
                 init_msmt_split = msmt_split
-                print(init_msmt_split)
 
                 # residual-weighted sum of resvars across dets
                 init_resids = []  
@@ -318,9 +326,21 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 init_resid_weights = np.array(init_resids) / np.sum(init_resids)
                 init_weighted_resvars = [weight*np.array(resvars[idx]) for idx, weight in enumerate(init_resid_weights)]
                 init_weighted_resvar_sum = np.sum(np.array(init_weighted_resvars), axis=0)
-                msmt_split = np.ceil(total_shots * init_weighted_resvar_sum / np.sum(init_weighted_resvar_sum)).astype(int).tolist()
+                # weights = init_weighted_resvar_sum / np.sum(init_weighted_resvar_sum)  # standard weighted, more shots for larger resvar
+                weights = 1 - init_weighted_resvar_sum / np.sum(init_weighted_resvar_sum)  # reverse weighted, fewer shots for larger resvar
+                msmt_split = np.ceil(total_shots * weights).astype(int).tolist()
                 print(msmt_split)
 
+
+            # 3. REF DET ONLY
+            # if step%100 == 0 and (not QWC) and (not stoch_hamil) and total_shots:
+            #     det = ref
+            #     mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det, nqubits, current_ucc_circ)
+            #     resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
+            #     resvar_sum = np.sum(np.array(resvars))
+            #     msmt_split = np.ceil(total_shots * np.array(resvars) / resvar_sum).astype(int).tolist()
+            #     print(msmt_split)
+                
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                                     nqubits, current_ucc_circ)
@@ -359,6 +379,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
             #Compute shift the first time population crosses threshold.
             if sum(abs(pops[x]) for x in pops) >= pop_thresh and not vary_shift:
+
+                # MEASUREMENT SPLIT FIRST TIME SHIFT IS NONZERO
                 # if (not QWC) and (not stoch_hamil) and total_shots:
                 #     new_msmt_split = []
                 #     new_resids = []
@@ -376,7 +398,9 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 #     new_resid_weights = np.array(new_resids) / np.sum(new_resids)
                 #     new_weighted_resvars = [weight*np.array(resvars[idx]) for idx, weight in enumerate(new_resid_weights)]
                 #     new_weighted_resvar_sum = np.sum(np.array(new_weighted_resvars), axis=0)
-                #     new_msmt_split = np.ceil(total_shots * new_weighted_resvar_sum / np.sum(new_weighted_resvar_sum)).astype(int).tolist()
+                #     # weights = new_weighted_resvar_sum / np.sum(new_weighted_resvar_sum)
+                #     weights = 1 - new_weighted_resvar_sum / np.sum(new_weighted_resvar_sum)
+                #     new_msmt_split = np.ceil(total_shots * weights).astype(int).tolist()
                 #     msmt_split = new_msmt_split
                 #     print(new_msmt_split)
 

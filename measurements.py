@@ -64,26 +64,29 @@ def measure_hamil_overlap_shots(ps_g, circuits, n_shots):
                     all_counts.append(count)
     return hamil_elem, all_counts
 
-def measure_hamil_overlap_groups_matrices(ps_g, mats, mcirc, mapping, nshots = 0, gaussian = False):
+def measure_hamil_overlap_groups_matrices(ps_g, mats, vector, mapping, nshots = 0, gaussian = False):
     hamil_elem = 0
     for pauli_group, mat in mats.items():
-        if pauli_group in ps_g:
-            vector = mcirc.get_statevector()
-            vector = mat.dot(vector)
-            counts = get_counts(vector, nshots, mapping, gaussian)
-            for pauli_str in ps_g[pauli_group]:
-                avg = 0
-                for count in counts:
-                    sign = 1
-                    for index in pauli_str[2]:
-                        if count[index] == 1:
-                            sign *= -1
-                    avg += sign * counts[count]
+        if pauli_group not in ps_g:
+            continue
+        vector_loc = mat.dot(vector)
+        counts = get_counts(vector_loc, nshots, mapping, gaussian)
+        bitstrings = np.array(list(counts.keys()))
+        freqs = np.array(list(counts.values()), dtype = float)
+        
+        for pauli_str in ps_g[pauli_group]:
+            z_idx = pauli_str[2]
+
+            if len(z_idx) == 0:
+                avg = freqs.sum()
+            else:
+                parity = bitstrings[:,z_idx].sum(axis = 1) & 1
+                signs = 1 - 2 * parity
+                avg = np.dot(signs, freqs)
                 if nshots and not gaussian:
                     hamil_elem += pauli_str[1] * avg/nshots
                 elif nshots and gaussian:
-                    epsilon = 1/nshots
-                    hamil_elem += pauli_str[1]*(avg + np.random.normal(0, epsilon))
+                    hamil_elem += pauli_str[1]*(avg + np.random.normal(0, 1/nshots))
                 else:
                     hamil_elem += pauli_str[1]*avg
     return hamil_elem
@@ -113,11 +116,9 @@ def get_resvars(num_q, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, ns
                     xor_val = xor_val ^ count[measured_qubit_idx]
                 xor_phase = (-1) ** xor_val
                 if nshots != 0:
-                    # hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
-                    hamil_overlap += coeff * qubit_parity_phase * counts[count]/nshots
+                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
                 else:
-                    # hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
-                    hamil_overlap += coeff * qubit_parity_phase * counts[count]
+                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
 
         for sq_qubits_to_measure, sq_qubit_parity_phase, sq_coeff in zip(sq_qubits_to_measure_list, sq_phases, sq_coeffs):
             for sq_count in sq_counts.keys():
@@ -134,11 +135,10 @@ def get_resvars(num_q, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, ns
 
     return resvars
 
-
-def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0, gaussian=False, shot_split=None):
+def measure_collection_overlap(num_q, mats_with_coeffs, vector, mapping, nshots=0, gaussian=False, shot_split=None):
     '''Sorted insertion <phi_i|H|Psi> term'''
     hamil_overlap = 0
-    curr_statevector = mcirc.get_statevector()
+    curr_statevector = vector
 
     for coll_idx, coll_msmt_inputs in enumerate(mats_with_coeffs):
         msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
@@ -146,64 +146,51 @@ def measure_collection_overlap(num_q, mats_with_coeffs, mcirc, mapping, nshots=0
         if shot_split:
             nshots = shot_split[coll_idx]
         counts = get_counts(statevec, nshots, mapping, gaussian)
+        bitstrings = np.array(list(counts.keys()))
+        freqs = np.array(list(counts.values()), dtype = float)
+        if nshots:
+            freqs/=nshots
 
         for pauli_string, qubits_to_measure, qubit_parity_phase in list(zip(coll, qubits_to_measure_list, phases)):
             coeff = list(pauli_string.terms.values())[0]
-            for count in list(counts.keys()):
-                xor_val = 0
-                for measured_qubit_idx in qubits_to_measure:
-                    xor_val = xor_val ^ count[measured_qubit_idx]
-                xor_phase = (-1) ** xor_val
-                if nshots != 0:
-                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]/nshots
-                else:
-                    hamil_overlap += coeff * xor_phase * qubit_parity_phase * counts[count]
+            parity = bitstrings[:,qubits_to_measure].sum(axis = 1) & 1
+            signs = 1 - 2*parity
+            hamil_overlap += coeff * qubit_parity_phase * (signs @ freqs)
                 
     return hamil_overlap
 
 
-def measure_overlap_shots_mat(mcirc, mapping, nshots = 0, gaussian = False):
-    overlap = 0
-    vector = mcirc.get_statevector()
+def measure_overlap_shots_mat(vector, mapping, nshots = 0, gaussian = False):
     counts = get_counts(vector, nshots, mapping, gaussian)
-    avg = 0
-    for count in counts:
-        sign = 1
-        if count[0] == 1:
-            sign *= -1
-        avg += sign * counts[count]
+    
+    keys = list(counts.keys())
+    freqs = np.fromiter(counts.values(), dtype=float)
+    signs = np.array([1-2*k[0] for k in keys], dtype=float)
+
+    avg = signs @ freqs
+
     if nshots and not gaussian:
         overlap = avg/nshots
     elif nshots and gaussian:
-        epsilon = 1/nshots
-        overlap = avg + np.random.normal(0,epsilon)
+        overlap = avg + np.random.normal(0, 1/nshots)
     else:
         overlap = avg
     return overlap
 
 def get_counts(vector, nshots, mapping, gaussian = False):
-    vector_square = np.conj(vector)*vector
-    indices = []
-    distribution = []
-    prob = 0
-    for i in range(len(vector_square)):
-        if vector_square[i] > 1e-9:
-            prob += vector_square[i]
-            indices.append(i)
-            distribution.append(prob)
-    distribution[:]/=distribution[-1]
+    vector_square = np.abs(vector)**2
     if nshots == 0 or gaussian:
-        counts = {mapping[a]:vector_square[a].real for a in mapping}
-        return counts
-    counts = {}
-    rands = np.random.rand(nshots)
-    for rand in rands:
-        j = bisect.bisect_left(distribution, rand)
-        if mapping[indices[j]] in counts:
-            counts[mapping[indices[j]]] +=1
-        else:
-            counts[mapping[indices[j]]] =1
-    return counts
+        return {mapping[a]:vector_square[a].real for a in mapping}
+
+    mask = vector_square > 1e-9
+    indices = np.nonzero(mask)[0]
+    probs = vector_square[mask].real
+    probs /= probs.sum()
+
+    samples = np.random.choice(indices, size=nshots, p=probs)
+    unique, counts = np.unique(samples, return_counts=True)
+
+    return {mapping[a]: int(c) for a, c in zip(unique, counts)}
 
 def measure_hamil_overlap(mcirc, ps_g, nqubits, shots= False, n_shots = 0):
     '''Measure <D2|HU|D1>'''

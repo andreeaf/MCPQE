@@ -163,7 +163,7 @@ def generate_excitation_operators(dets, ref, nspin_orb):
     ex, deex = generate_excitation_strings(dets, ref, nspin_orb)
     operators = {i: (FermionOperator(ex[i])) -
                  (FermionOperator(deex[i])) for i in ex}
-    print(operators)
+    # print(operators)
 
     return operators
 

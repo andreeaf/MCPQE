@@ -416,7 +416,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                                         mcirc, mapping, shots)
                     else:
                         if total_shots:
-                            # msmt_split = shot_split_by_det[det] # FOR METHODS 2 OR 4 ABOVE
+                            msmt_split = shot_split_by_det[det] # FOR METHODS 2 OR 4 ABOVE
                             hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, shot_split=msmt_split)
                         else:
                             hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, nshots=shots)
@@ -477,7 +477,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                         mapping, shots) - hf_e
                 else:
                     if total_shots:
-                        # msmt_split = shot_split_by_det[ref]  # FOR METHODS 2 OR 4 ABOVE
+                        msmt_split = shot_split_by_det[ref]  # FOR METHODS 2 OR 4 ABOVE
                         shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, 
                                                                         shot_split=msmt_split)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e
                     else:

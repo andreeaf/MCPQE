@@ -4,6 +4,7 @@ import copy
 import time
 import sys
 from openfermion import jordan_wigner
+from openfermion.linalg import qubit_operator_sparse
 from sympy import Symbol
 import numpy as np
 import utils
@@ -153,6 +154,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         QWC = False
         print("SI")
 
+    Z = np.array([[1,0],[0,-1]])
+
     #Map integers to occupation strings of the whole system + ancilla Hilbert space
     mapping = {det: utils.get_bits(det, nqubits +1) for det in range(2**(nqubits+1))}
     time1 = time.time()
@@ -271,6 +274,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         e_proj_list = []
         msmt_split = []
         shot_split_by_det = {}
+        NUM_DETS = len(dets)
         for step in range(nsteps+1):
             if step%10 == 0:
                 print(f"STEP {step}")
@@ -320,48 +324,84 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
 
                 # 3. SAME SHOT SPLIT FOR EACH DET (SUM RESVARS ACROSS DETS)
-                resvars = []
-                for det in dets:  
-                    mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
-                                                                        nqubits, current_ucc_circ)
-                    det_resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
-                    resvars.append(np.abs(det_resvars).tolist())
-                resvar_sum = np.sum(np.array(resvars), axis=0)
-                resstd_sum = np.sqrt(resvar_sum)  # try split by residual stdev instead of resvar
-                msmt_split = np.ceil(total_shots * resstd_sum / np.sum(resstd_sum)).astype(int).tolist()
-                init_msmt_split = msmt_split
-                print(init_msmt_split)
+                # resvars = []
+                # for det in dets:
+                #     if det != ref:  
+                #         mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                #                                                             nqubits, current_ucc_circ)
+                #         det_resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
+                #         # if not np.all(np.round(det_resvars, 9) > 0):
+                #         #     print(det)
+                #         #     statevec = mcirc.get_statevector()
+                #         #     with open(f"{det}_starting_statevec.npy", "wb") as f:
+                #         #         np.save(f, statevec)
+                #         #     with open(f"{det}_starting_resvar.npy", "wb") as f:
+                #         #         np.save(f, det_resvars)
+                #         resvars.append(np.abs(det_resvars).tolist())
+                # resvar_sum = np.sum(np.array(resvars), axis=0)
+                # resstd_sum = np.sqrt(resvar_sum)  # try split by residual stdev instead of resvar
+                # msmt_split = np.ceil(total_shots * resstd_sum / np.sum(resstd_sum)).astype(int).tolist()
+                # init_msmt_split = msmt_split
+                # print(init_msmt_split)
 
-                # residual-weighted sum of resvars across dets
-                init_resids = []  
+                # # residual-weighted sum of resvars across dets
+                # init_resids = []  
+                # for det in dets:
+                #     if det != ref:
+                #         mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                #                                                                 nqubits, current_ucc_circ)
+                #         statevec = mcirc.get_statevector()
+                #         hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, shot_split=init_msmt_split)
+                #         overlap = measurements.measure_overlap_shots_mat(statevec, mapping, shots)
+                #         resid = pops[ref]*(hamil_overlap - (shift + hf_e) * overlap)
+                #         init_resids.append(np.abs(resid))
+
+                # init_resid_weights = np.array(init_resids) / np.sum(init_resids)
+                # init_weighted_resvars = [weight*np.array(resvars[idx]) for idx, weight in enumerate(init_resid_weights)]
+                # init_weighted_resvar_sum = np.sum(np.array(init_weighted_resvars), axis=0)
+                # init_weighted_resstd_sum = np.sqrt(init_weighted_resvar_sum)
+                # weights = (init_weighted_resstd_sum / np.sum(init_weighted_resstd_sum))  # standard weighted, more shots for larger resvar
+                # # weights = (1 - init_weighted_resvar_sum / np.sum(init_weighted_resvar_sum)) / (len(init_weighted_resvar_sum) - 1)  # reverse weighted, fewer shots for larger resvar
+                # # print(weights)
+                # msmt_split = np.ceil(total_shots * weights).astype(int).tolist()
+                # print(msmt_split)
+
+
+                # 4. EACH DET HAS DIFFERENT TOTAL SHOTS, DIFFERENT SHOT DISTRIBUTION
+                collection_mats_with_ancilla = []
+                for collection in collections:
+                    d_mat = np.zeros(shape=(2**nqubits, 2**nqubits))
+                    for op in collection:
+                        d_mat = d_mat + qubit_operator_sparse(op, nqubits).toarray()
+                    zd_mat = np.kron(Z, d_mat)
+                    collection_mats_with_ancilla.append(zd_mat)
+
+                total_shots_all_dets = NUM_DETS*total_shots
+                resvars_by_det_and_coll = []  # [[det 1: coll 1, ..., coll n], [det 2: coll 1, ..., coll n], ...]
                 for det in dets:
                     mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
-                                                                             nqubits, current_ucc_circ)
-                    statevec = mcirc.get_statevector()
-                    hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, shot_split=init_msmt_split)
-                    overlap = measurements.measure_overlap_shots_mat(statevec, mapping, shots)
-                    resid = pops[ref]*(hamil_overlap - (shift + hf_e) * overlap)
-                    init_resids.append(np.abs(resid))
+                                                                        nqubits, current_ucc_circ)
+                    curr_statevec = mcirc.get_statevector()
+                    det_resvar_list = []
+                    for zd_mat in collection_mats_with_ancilla:
+                        sq_term = np.real(curr_statevec @ (zd_mat @ zd_mat) @ curr_statevec.T)
+                        term = np.real(curr_statevec @ zd_mat @ curr_statevec)
+                        det_resvar_list.append(np.round(sq_term - term**2, 9))
+                    resvars_by_det_and_coll.append(det_resvar_list)
+                
+                if not np.all(np.array(resvars_by_det_and_coll) >= 0):
+                    print("SERIOUS ERROR - EXACTLY COMPUTED RESVAR IS NEGATIVE AT THESE POSITIONS ([DET IDX, COLL IDX]): ")
+                    print(np.argwhere(np.array(resvars_by_det_and_coll) < 0))
+                resvar_sum_over_colls = np.sum(resvars_by_det_and_coll, axis=1)  # sum of resvar across all colls for each det
+                resstd_over_colls = np.sqrt(resvar_sum_over_colls)
+                det_total_shot_split = np.ceil(total_shots_all_dets * resstd_over_colls / np.sum(resstd_over_colls)).astype(int).tolist()
 
-                init_resid_weights = np.array(init_resids) / np.sum(init_resids)
-                init_weighted_resvars = [weight*np.array(resvars[idx]) for idx, weight in enumerate(init_resid_weights)]
-                init_weighted_resvar_sum = np.sum(np.array(init_weighted_resvars), axis=0)
-                init_weighted_resstd_sum = np.sqrt(init_weighted_resvar_sum)
-                weights = (init_weighted_resstd_sum / np.sum(init_weighted_resstd_sum))  # standard weighted, more shots for larger resvar
-                # weights = (1 - init_weighted_resvar_sum / np.sum(init_weighted_resvar_sum)) / (len(init_weighted_resvar_sum) - 1)  # reverse weighted, fewer shots for larger resvar
-                # print(weights)
-                msmt_split = np.ceil(total_shots * weights).astype(int).tolist()
-                print(msmt_split)
+                for det_idx, det in enumerate(dets):
+                    det_total_shots = det_total_shot_split[det_idx]
+                    det_resstd_list = np.sqrt(resvars_by_det_and_coll[det_idx])
+                    det_shot_split = np.ceil(det_total_shots * det_resstd_list / np.sum(det_resstd_list)).astype(int).tolist()
+                    shot_split_by_det[det] = det_shot_split
 
-
-            # 4. REF DET ONLY
-            # if step%100 == 0 and (not QWC) and (not stoch_hamil) and total_shots:
-            #     det = ref
-            #     mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det, nqubits, current_ucc_circ)
-            #     resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
-            #     resvar_sum = np.sum(np.array(resvars))
-            #     msmt_split = np.ceil(total_shots * np.array(resvars) / resvar_sum).astype(int).tolist()
-            #     print(msmt_split)
                 
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
@@ -376,7 +416,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                                         mcirc, mapping, shots)
                     else:
                         if total_shots:
-                            # msmt_split = shot_split_by_det[det] # FOR METHOD 2 ABOVE
+                            # msmt_split = shot_split_by_det[det] # FOR METHODS 2 OR 4 ABOVE
                             hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, shot_split=msmt_split)
                         else:
                             hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, nshots=shots)
@@ -437,7 +477,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                         mapping, shots) - hf_e
                 else:
                     if total_shots:
-                        # msmt_split = shot_split_by_det[ref]  # FOR METHOD 2 ABOVE
+                        # msmt_split = shot_split_by_det[ref]  # FOR METHODS 2 OR 4 ABOVE
                         shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, 
                                                                         shot_split=msmt_split)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e
                     else:

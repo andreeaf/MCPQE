@@ -14,6 +14,7 @@ import stoch_gates
 import hamil
 from hamil_decomps import sorted_insertion
 from pytket.circuit import OpType
+from pytket.extensions.qiskit import AerStateBackend
 
 def get_stoch_wfn(pops, params, dets, ref, noise_symbols = None, prob = None, gamma = None):
     ''' Stochastically round amplitudes in the wavefunction.
@@ -195,7 +196,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 (mat[0], mat[1], mat[2], collections[i])
                 for i, mat in enumerate(mats)
             ]  # list of (collection msmt matrix, qubits to measure, phases, collection) for each collection
-            sq_mats_with_coeffs = hamil.get_hamil_sq_si_collection_msmt_matrices(collections, nqubits)  #list of (msmt circuit matrix, qubits to measure, phases, coeffs, identity term) for each collection
+            # sq_mats_with_coeffs = hamil.get_hamil_sq_si_collection_msmt_matrices(collections, nqubits)  #list of (msmt circuit matrix, qubits to measure, phases, coeffs, identity term) for each collection
 
     num_colls = len(mats)
     if total_shots and not shots:
@@ -401,19 +402,31 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                     det_resstd_list = np.sqrt(resvars_by_det_and_coll[det_idx])
                     det_shot_split = np.ceil(det_total_shots * det_resstd_list / np.sum(det_resstd_list)).astype(int).tolist()
                     shot_split_by_det[det] = det_shot_split
+                
+                print(shot_split_by_det)
 
                 
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                                     nqubits, current_ucc_circ)
-                statevec = mcirc.get_statevector()
+                statevec: np.ndarray
+                if nqubits < 10:
+                    statevec = mcirc.get_statevector()
+                else:
+                    backend = AerStateBackend(nqubits+1)
+                    compiled_mirc = backend.get_compiled_circuit(mcirc)
+                    all_zeros_statevec = np.zeros(2**(nqubits+1))
+                    all_zeros_statevec[0] = 1
+                    results = backend.run_circuit(compiled_mirc, 0, initial_state=all_zeros_statevec)
+                    statevec = results.get_state()
+                
                 if stoch_hamil:
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups_loc,
                                                                     mats, mcirc, mapping, shots)
                 else:
                     if QWC:
                         hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups, mats,
-                                                                        mcirc, mapping, shots)
+                                                                        statevec, mapping, shots)
                     else:
                         if total_shots:
                             msmt_split = shot_split_by_det[det] # FOR METHODS 2 OR 4 ABOVE
@@ -470,10 +483,20 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref, nqubits,
                                                                           current_ucc_circ)
-                statevec = mcirc.get_statevector()
+                statevec: np.ndarray
+                if nqubits < 10:
+                    statevec = mcirc.get_statevector()
+                else:
+                    backend = AerStateBackend()
+                    compiled_mirc = backend.get_compiled_circuit(mcirc)
+                    all_zeros_statevec = np.zeros(2**(nqubits+1))
+                    all_zeros_statevec[0] = 1
+                    results = backend.run_circuit(compiled_mirc, 0, initial_state=all_zeros_statevec)
+                    statevec = results.get_state()
+
                 if QWC:
-                    shift = measurements.measure_hamil_overlap_groups_matrices(groups, mats, mcirc,
-                                    mapping, shots)/measurements.measure_overlap_shots_mat(mcirc,
+                    shift = measurements.measure_hamil_overlap_groups_matrices(groups, mats, statevec,
+                                    mapping, shots)/measurements.measure_overlap_shots_mat(statevec,
                                                         mapping, shots) - hf_e
                 else:
                     if total_shots:

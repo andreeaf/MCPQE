@@ -142,7 +142,13 @@ def measure_collection_overlap(num_q, mats_with_coeffs, vector, mapping, nshots=
 
     for coll_idx, coll_msmt_inputs in enumerate(mats_with_coeffs):
         msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
-        statevec = msmt_mat.dot(curr_statevector)
+        if num_q >= 10:
+            msmt_circ = msmt_mat  # msmt_mat is actually a pytket.Circuit
+            backend = AerStateBackend(num_q+1)
+            result = backend.run_circuit(msmt_circ, 0, initial_state=curr_statevector)
+            statevec = result.get_state()
+        else:    
+            statevec = msmt_mat.dot(curr_statevector)
         if shot_split:
             nshots = shot_split[coll_idx]
         counts = get_counts(statevec, nshots, mapping, gaussian)

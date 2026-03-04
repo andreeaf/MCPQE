@@ -135,17 +135,19 @@ def get_resvars(num_q, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, ns
 
     return resvars
 
-def measure_collection_overlap(num_q, mats_with_coeffs, vector, mapping, nshots=0, gaussian=False, shot_split=None):
+def measure_collection_overlap(num_q, mats_with_coeffs, vector, mapping, nshots=0, gaussian=False, shot_split=None, backend: AerStateBackend = None, full_output=False):
     '''Sorted insertion <phi_i|H|Psi> term'''
     hamil_overlap = 0
     curr_statevector = vector
+    hamil_overlap_list_by_coll = []
 
     for coll_idx, coll_msmt_inputs in enumerate(mats_with_coeffs):
         msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
-        if num_q >= 10:
+        if num_q >= 11:
             msmt_circ = msmt_mat  # msmt_mat is actually a pytket.Circuit
-            backend = AerStateBackend(num_q+1)
-            result = backend.run_circuit(msmt_circ, 0, initial_state=curr_statevector)
+            # backend = AerStateBackend(num_q+1)
+            compiled_msmt_circ = backend.get_compiled_circuit(msmt_circ)
+            result = backend.run_circuit(compiled_msmt_circ, 0, initial_state=curr_statevector)
             statevec = result.get_state()
         else:    
             statevec = msmt_mat.dot(curr_statevector)
@@ -157,12 +159,20 @@ def measure_collection_overlap(num_q, mats_with_coeffs, vector, mapping, nshots=
         if nshots:
             freqs/=nshots
 
+        coll_hamil_overlap = 0
         for pauli_string, qubits_to_measure, qubit_parity_phase in list(zip(coll, qubits_to_measure_list, phases)):
             coeff = list(pauli_string.terms.values())[0]
             parity = bitstrings[:,qubits_to_measure].sum(axis = 1) & 1
             signs = 1 - 2*parity
-            hamil_overlap += coeff * qubit_parity_phase * (signs @ freqs)
-                
+            add_term = coeff * qubit_parity_phase * (signs @ freqs)
+            coll_hamil_overlap += add_term
+            hamil_overlap += add_term
+        
+        hamil_overlap_list_by_coll.append(coll_hamil_overlap)
+    
+    if full_output:
+        return hamil_overlap, hamil_overlap_list_by_coll
+    
     return hamil_overlap
 
 

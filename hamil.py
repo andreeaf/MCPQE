@@ -173,7 +173,7 @@ def get_hamil_si_collection_msmt_matrices(collections: list[list[QubitOperator]]
     for collection in collections:
         R_mat, measurement_circ, phases, _ = CZ_measurement(num_q, collection)  # this adds the ancilla with Z
         qubits_to_measure = [tuple(np.where(R_row == 1)[0]) for R_row in R_mat]
-        if num_q <= 10:
+        if num_q < 11:
             msmt_circ_mat = measurement_circ.get_unitary()
             if np.all(np.isreal(msmt_circ_mat)):
                 msmt_circ_mat = msmt_circ_mat.real

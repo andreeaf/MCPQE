@@ -311,7 +311,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
 
             # 2, 3. ALL DETS, INDIVIDUAL DET SHOT SPLIT OR RESVAR SUM OVER COLLECTIONS WEIGHTED BY |RESIDUAL|
-            if (step>=0) and (not QWC) and (not stoch_hamil) and total_shots:
+            if (step==0 or step == 110) and (not QWC) and (not stoch_hamil) and total_shots:
                 
                 # 2. DIFFERENT SHOT SPLIT FOR EACH DET (NO SUMMING RESVAR)
                 # for det in dets:
@@ -518,8 +518,9 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 else:
                     if total_shots:
                         msmt_split = shot_split_by_det[ref]  # FOR METHODS 2 OR 4 ABOVE
-                        shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, 
-                                                                        shot_split=msmt_split, backend=backend)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e
+                        # shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, 
+                        #                                                 shot_split=msmt_split, backend=backend)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e
+                        shift = -0.03779949229141444
                     else:
                         # shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, 
                         #                                                 shots, backend=backend)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e

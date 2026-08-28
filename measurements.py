@@ -1,6 +1,8 @@
 import bisect
 import numpy as np
 import utils
+import hamil
+from pytket import Circuit
 from pytket.extensions.qiskit import AerBackend, AerStateBackend
 from itertools import product
 from hamil_decomp_utils import tensorproduct
@@ -143,13 +145,9 @@ def measure_collection_overlap(num_q, mats_with_coeffs, vector, mapping, nshots=
 
     for coll_idx, coll_msmt_inputs in enumerate(mats_with_coeffs):
         msmt_mat, qubits_to_measure_list, phases, coll = coll_msmt_inputs
-        if num_q >= 11:
-            msmt_circ = msmt_mat  # msmt_mat is actually a pytket.Circuit
-            # backend = AerStateBackend(num_q+1)
-            compiled_msmt_circ = backend.get_compiled_circuit(msmt_circ)
-            result = backend.run_circuit(compiled_msmt_circ, 0, initial_state=curr_statevector)
-            statevec = result.get_state()
-        else:    
+        if isinstance(msmt_mat, Circuit):
+            statevec = utils.apply_clifford_circuit(curr_statevector, msmt_mat)
+        else:
             statevec = msmt_mat.dot(curr_statevector)
         if shot_split:
             nshots = shot_split[coll_idx]
@@ -192,6 +190,50 @@ def measure_overlap_shots_mat(vector, mapping, nshots = 0, gaussian = False):
     else:
         overlap = avg
     return overlap
+
+class ExactVariance:
+    """Shot-noise-free variances of the Hadamard-test estimators."""
+
+    def __init__(self, num_q, si_collections=None, qwc_groups=None):
+        if (si_collections is None) == (qwc_groups is None):
+            raise ValueError("Pass exactly one of si_collections and qwc_groups")
+        if si_collections is not None:
+            self.group_z_anc = [hamil.get_si_collection_zanc(c, num_q) for c in si_collections]
+        else:
+            self.group_z_anc = [hamil.get_qwc_group_z_anc(g, num_q + 1)
+                             for g in qwc_groups.values()]
+        self.ov_z_anc = hamil.get_overlap_z_anc(num_q)
+        # squares are precomputed; the variances are recomputed every record step
+        self.group_z_anc2 = [(z @ z).tocsr() for z in self.group_z_anc]
+        self.ov_z_anc2 = (self.ov_z_anc @ self.ov_z_anc).tocsr()
+        self.num_groups = len(self.group_z_anc)
+
+    @staticmethod
+    def _var(sv, g, g2):
+        t = float(np.real(sv @ (g @ sv)))
+        return max(round(float(np.real(sv @ (g2 @ sv))) - t**2, 9), 0.0)
+
+    def compute(self, svecs):
+        """(group_vars, overlap_vars) for a list of doubled-space statevectors."""
+        group_vars = np.array([[self._var(sv, self.group_z_anc[c], self.group_z_anc2[c])
+                                for c in range(self.num_groups)] for sv in svecs])
+        ov_vars = np.array([self._var(sv, self.ov_z_anc, self.ov_z_anc) for sv in svecs])
+        return group_vars, ov_vars
+
+
+def measure_det_hamil_overlap(num_q, vector, mapping, group_split, ov_shots,
+                              si_mwc=None, qwc_groups=None, qwc_mats=None, qwc_keys=None):
+    if si_mwc is not None:
+        h_ov = measure_collection_overlap(num_q, si_mwc, vector, mapping,
+                                          nshots=group_split[0], shot_split=group_split)
+    else:
+        h_ov = sum(
+            measure_hamil_overlap_groups_matrices(
+                {k: qwc_groups[k]}, {k: qwc_mats[k]}, vector, mapping,
+                nshots=int(group_split[i]))
+            for i, k in enumerate(qwc_keys))
+    ov = measure_overlap_shots_mat(vector, mapping, nshots=ov_shots)
+    return h_ov, ov
 
 def get_counts(vector, nshots, mapping, gaussian = False):
     vector_square = np.abs(vector)**2

@@ -2,12 +2,13 @@
 
 from typing import List
 
+from pytket.circuit import OpType
 from pytket.pauli import Pauli
 from pytket.extensions.qiskit import AerBackend
 from openfermion.ops import FermionOperator, QubitOperator
-#from openfermion import normal_ordered
 
 import numpy as np
+INV_SQRT2 = 1/np.sqrt(2)
 
 def count_set_bits(number:int):
     '''Count set bits in integer number.'''
@@ -236,6 +237,56 @@ def get_spawns(circ, n_shots=10):
     handle = backend.process_circuit(circ, n_shots = n_shots)
     counts = backend.get_result(handle).get_counts()
     return counts.keys()
+
+
+def apply_clifford_circuit(state, circuit, nqubits: int = None):
+    ''' Apply an H/S/CZ measurement circuit to a statevector, without a simulator.
+
+        Args:
+            state: statevector
+            circuit: pytket Circuit built from H, S and CZ gates
+            nqubits: qubit count
+
+        Returns:
+            the transformed statevector
+    '''
+    if nqubits is None:
+        nqubits = circuit.n_qubits
+    if nqubits != len(state).bit_length() - 1:
+        raise ValueError(f"State length {len(state)} does not match nqubits {nqubits}")
+    commands = circuit.get_commands()
+
+    if any(cmd.op.type == OpType.S for cmd in commands):
+        vec = np.asarray(state, dtype=complex).copy()
+    else:
+        vec = np.array(state, copy=True)
+
+    for cmd in commands:
+        qubits = [q.index[0] for q in cmd.qubits]
+        if cmd.op.type == OpType.H:
+            q = qubits[0]
+            # Reshape to (2^q, 2, 2^(nqubits-q-1)) so that the middle axis is the target qubit.
+            v = vec.reshape(1 << q, 2, 1 << (nqubits - q - 1))
+            top = v[:, 0, :].copy()
+            bot = v[:, 1, :]
+            v[:, 0, :] = (top + bot)*INV_SQRT2
+            v[:, 1, :] = (top - bot)*INV_SQRT2
+        elif cmd.op.type == OpType.S:
+            q = qubits[0]
+            # Reshape to (2^q, 2, 2^(nqubits-q-1)) so that the middle axis is the target qubit.
+            v = vec.reshape(1 << q, 2, 1 << (nqubits - q - 1))
+            v[:, 1, :] *= 1j
+        elif cmd.op.type == OpType.CZ:
+            q1, q2 = sorted(qubits)
+            # Reshape to (2^q1, 2, 2^(q2-q1-1), 2, 2^(nqubits-q2-1)) so that the middle axes are the target qubits.
+            v = vec.reshape(1 << q1, 2, 1 << (q2 - q1 - 1), 2,
+                            1 << (nqubits - q2 - 1))
+            v[:, 1, :, 1, :] *= -1
+        else:
+            raise NotImplementedError(
+                f"apply_clifford_circuit only handles H, S and CZ, got {cmd.op.type}")
+
+    return vec
 
 def get_molecular_geometry(xyzfile):
     geometry = []

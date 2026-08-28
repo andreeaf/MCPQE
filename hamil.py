@@ -11,7 +11,8 @@ from pytket.circuit import Circuit
 from pytket.pauli import Pauli
 from scipy.sparse import csr_array, save_npz
 from test_measurement_circs import CZ_measurement, resvar_sq_term_msmt
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, identity, kron
+from openfermion.linalg import qubit_operator_sparse
 
 import utils
 
@@ -161,6 +162,27 @@ def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str = None):
     #with open(filename, 'wb') as matrix_file:
     #    pickle.dump(mats, matrix_file)
     return mats
+
+
+gate_map = {Pauli.X: 'X', Pauli.Y: 'Y', Pauli.Z: 'Z'} 
+z_mat_sparse = csr_matrix(np.array([[1.0, 0.0], [0.0, -1.0]]))
+
+
+def get_si_collection_z_anc(collection: list[QubitOperator], num_q: int):
+    sys_op = sum(qubit_operator_sparse(op, num_q) for op in collection).real
+     return csr_matrix(kron(z_mat_sparse, sys_op, format="csr"))   
+
+
+def get_qwc_group_z_anc(strings: list, num_q_total: int):
+    op = QubitOperator()
+    for paulis, coeff, qubits in strings:
+        op += QubitOperator(tuple((int(q), gate_map[p])
+                                  for p, q in zip(paulis, qubits)), coeff)
+    return csr_matrix(qubit_operator_sparse(op, num_q_total).real)
+
+
+def get_overlap_z_anc(num_q: int):
+    return csr_matrix(kron(z_mat_sparse, identity(2**num_q, format="csr"), format="csr"))
 
 
 def get_hamil_si_collection_msmt_matrices(collections: list[list[QubitOperator]], num_q: int):

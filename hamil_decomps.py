@@ -61,14 +61,17 @@ def sorted_insertion(molecule: str = None, fermi_hamil: FermionOperator = None) 
     Returns:
         list of collections of mutually commuting Pauli strings
     '''
-    if molecule:
-        data = get_molecular_data()
-        hamil = data[molecule][0]
+    if qubit_hamil is not None:
+        pauli_hamil = qubit_hamil
     else:
-        hamil = fermi_hamil
+        if molecule:
+            data = get_molecular_data()
+            hamil = data[molecule][0]
+        else:
+            hamil = fermi_hamil
 
-    pauli_hamil = jordan_wigner(hamil)
-    pauli_hamil.compress()
+        pauli_hamil = jordan_wigner(hamil)
+        pauli_hamil.compress()
     pauli_hamil_arr = list(pauli_hamil.get_operators())
 
     # Sort Pauli strings by absolute value of coefficients

@@ -10,6 +10,9 @@ from openfermionpyscf import run_pyscf
 from pytket.circuit import Circuit
 from pytket.pauli import Pauli
 from scipy.sparse import csr_array, save_npz
+from test_measurement_circs import CZ_measurement, resvar_sq_term_msmt
+from scipy.sparse import csr_matrix, identity, kron
+from openfermion.linalg import qubit_operator_sparse
 
 import utils
 
@@ -159,3 +162,59 @@ def get_hamil_group_matrices(ps_g:dict, nqubits:int, filename:str = None):
     #with open(filename, 'wb') as matrix_file:
     #    pickle.dump(mats, matrix_file)
     return mats
+
+
+gate_map = {Pauli.X: 'X', Pauli.Y: 'Y', Pauli.Z: 'Z'} 
+z_mat_sparse = csr_matrix(np.array([[1.0, 0.0], [0.0, -1.0]]))
+
+
+def get_si_collection_z_anc(collection: list[QubitOperator], num_q: int):
+    sys_op = sum(qubit_operator_sparse(op, num_q) for op in collection).real
+     return csr_matrix(kron(z_mat_sparse, sys_op, format="csr"))   
+
+
+def get_qwc_group_z_anc(strings: list, num_q_total: int):
+    op = QubitOperator()
+    for paulis, coeff, qubits in strings:
+        op += QubitOperator(tuple((int(q), gate_map[p])
+                                  for p, q in zip(paulis, qubits)), coeff)
+    return csr_matrix(qubit_operator_sparse(op, num_q_total).real)
+
+
+def get_overlap_z_anc(num_q: int):
+    return csr_matrix(kron(z_mat_sparse, identity(2**num_q, format="csr"), format="csr"))
+
+
+def get_hamil_si_collection_msmt_matrices(collections: list[list[QubitOperator]], num_q: int):
+    '''Measurement matrices for each collection
+    
+    Returns list of [measurement matrix, qubits to measure, phases] for each collection
+    '''
+    ret_arr = []
+
+    for collection in collections:
+        R_mat, measurement_circ, phases, _ = CZ_measurement(num_q, collection)  # this adds the ancilla with Z
+        qubits_to_measure = [tuple(np.where(R_row == 1)[0]) for R_row in R_mat]
+        if num_q < 11:
+            msmt_circ_mat = measurement_circ.get_unitary()
+            if np.all(np.isreal(msmt_circ_mat)):
+                msmt_circ_mat = msmt_circ_mat.real
+            ret_arr.append([csr_array(msmt_circ_mat), qubits_to_measure, phases])
+        else:
+            ret_arr.append([measurement_circ, qubits_to_measure, phases])
+
+    return ret_arr
+
+
+def get_hamil_sq_si_collection_msmt_matrices(collections: list[list[QubitOperator]], num_q: int):
+    ret_arr = []
+
+    for collection in collections:
+        iden_term, R_mat, msmt_circ, phases, product_coeffs = resvar_sq_term_msmt(num_q, collection)
+        qubits_to_measure = [tuple(np.where(R_row == 1)[0]) for R_row in R_mat]
+        msmt_circ_mat = msmt_circ.get_unitary()
+        if np.all(np.isreal(msmt_circ_mat)):
+            msmt_circ_mat = msmt_circ_mat.real
+        ret_arr.append([csr_array(msmt_circ_mat), qubits_to_measure, phases, product_coeffs, iden_term])
+
+    return ret_arr

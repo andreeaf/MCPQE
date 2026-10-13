@@ -4,6 +4,7 @@ import copy
 import time
 import sys
 from openfermion import jordan_wigner
+from openfermion.linalg import qubit_operator_sparse
 from sympy import Symbol
 import numpy as np
 import utils
@@ -11,7 +12,9 @@ import measurements
 import encode_ucc_wavefunction as euw
 import stoch_gates
 import hamil
+from hamil_decomps import sorted_insertion
 from pytket.circuit import OpType
+from pytket.extensions.qiskit import AerStateBackend
 
 def get_stoch_wfn(pops, params, dets, ref, noise_symbols = None, prob = None, gamma = None):
     ''' Stochastically round amplitudes in the wavefunction.
@@ -109,9 +112,9 @@ def spawn(apply_mats, ucc_circ, param_map, dets, nqubits, ref, mapping, spawned_
     return operators, qubit_ops, params, ucc_circ, param_map, signs
 
 
-def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, nsteps,
-               dets = None, stoch_hamil = False, sym = None, shots = False, nattempts = 1,
-               stoch_wfn = False, mats = None, apply_mats=None,
+def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, nsteps, coll_method,
+               dets=None, stoch_hamil=False, sym=None, shots=False, total_shots=False, nattempts = 1,
+               stoch_wfn=False, mats=None, apply_mats=None,
                depolarising_noise=False, noise_prob=0, gaussian_noise=False, damping_noise=False,
                damp_prob=0):
     '''Run MC-PQE calculation using the UCC ansatz.
@@ -125,11 +128,13 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         pop_thresh (int): population threshold.
         filename (str): output file.
         nsteps (int): number of QMC steps.
+        coll_method (str): Hamiltonian collection method (QWC or SI)
         dets (list): occupation list for determinants in UCC ansatz.
         stoch_hamil (bool): if True sample the Hamiltonian.
         sym (bool): if True
-        shots (int): number of shots used to measure observables. 
+        shots (int): number of shots used to measure observables per collection. 
                      If 0 (False), carry out statevector simulation.
+        total_shots (int): total number of shots used to measure observables.
         nattemps (int): number of hamiltonian terms to sample
         stoch_wfn (bool): if True, stochastically truncate wavefunction.
         hmat (str):
@@ -142,6 +147,15 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         damping noise (bool): if True, apply damping noise after every UCC excitation operation
         damp_prob (float): damping noise probability
     '''
+    QWC: bool
+    if coll_method.lower() == "qwc":
+        QWC = True
+        print("QWC")
+    else:
+        QWC = False
+        print("SI")
+
+    Z = np.array([[1,0],[0,-1]])
 
     #Map integers to occupation strings of the whole system + ancilla Hilbert space
     mapping = {det: utils.get_bits(det, nqubits +1) for det in range(2**(nqubits+1))}
@@ -159,7 +173,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     qubit_h = jordan_wigner(ferm_hamil)
     ps_h = hamil.get_hamil_pauli_strings(qubit_h)
     groups = utils.group_pauli_strings(ps_h)
-
+    collections = sorted_insertion(fermi_hamil=ferm_hamil)
 
     dets.sort(key = lambda x: utils.dets_list_order(x, ref))
 
@@ -173,7 +187,21 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     ucc_circ = euw.generate_controlled_ucc_circ(nqubits, qubit_ops, params)
 
     if mats is None:
-        mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')
+        if QWC:
+            mats = hamil.get_hamil_group_matrices(groups, nqubits, filename+'_mats')
+
+        else:
+            mats = hamil.get_hamil_si_collection_msmt_matrices(collections, nqubits)
+            mats_with_coeffs = [
+                (mat[0], mat[1], mat[2], collections[i])
+                for i, mat in enumerate(mats)
+            ]  # list of (collection msmt matrix, qubits to measure, phases, collection) for each collection
+            # sq_mats_with_coeffs = hamil.get_hamil_sq_si_collection_msmt_matrices(collections, nqubits)  #list of (msmt circuit matrix, qubits to measure, phases, coeffs, identity term) for each collection
+
+    num_colls = len(mats)
+    if total_shots and not shots:
+        # shots used to get initial measurement split
+        shots = int(np.ceil(total_shots/num_colls))
 
     #Generate probabilities for Hamiltonian term sampling
     if stoch_hamil:
@@ -187,7 +215,7 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
 
     #Sort determinants according to "standard" order
     dets.sort(key = lambda x: utils.dets_list_order(x, ref))
-    zeta = 1 #TODO: Pass in as parameter
+    zeta = 0.1 #TODO: Pass in as parameter  # 0.1 default
 
     #Generate excitation operators corresponding to determinants
     operators = utils.generate_excitation_operators(dets[1:], ref, nqubits)
@@ -235,16 +263,25 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
     #Open output file
     output_file = open(filename, 'a', encoding="utf-8")
     output_file.write('Starting QMC \n')
+    output_file.write(f"Collection method: {coll_method}\n")
     output_file.write('step      S         E_proj        N0         N_tot       Ni/N0\n')
     e_proj = 0
-
 
     #Do QMC
     if (not shots) and gaussian_noise:
         print('Invalid parameters. Asked for Gaussian noise but no number of shots provided.')
         sys.exit()
     if shots and not gaussian_noise:
+        e_proj_list = []
+        msmt_split = []
+        shot_split_by_det = {}
+        all_resvars_data = []
+        NUM_DETS = len(dets)
+        backend = AerStateBackend(nqubits+1)
+        force_shift_constant = True
         for step in range(nsteps+1):
+            if step%10 == 0:
+                print(f"STEP {step}")
             e_proj = 0
             ov_proj = 0
             if stoch_wfn and (depolarising_noise or damping_noise):
@@ -267,23 +304,145 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 groups_loc = get_stoch_hamil(keys, groups, nattempts,
                                              tot_weight, group_weights_cumul, group_weights)
 
+            # MEASUREMENT SPLITTING METHODS
+
+            # 1. HARDCODED
+            # msmt_split = [20000, 30000]
+
+
+            # 2, 3. ALL DETS, INDIVIDUAL DET SHOT SPLIT OR RESVAR SUM OVER COLLECTIONS WEIGHTED BY |RESIDUAL|
+            if (step==0 or step == 110) and (not QWC) and (not stoch_hamil) and total_shots:
+                
+                # 2. DIFFERENT SHOT SPLIT FOR EACH DET (NO SUMMING RESVAR)
+                # for det in dets:
+                #     mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                #                                                         nqubits, current_ucc_circ)
+                #     det_resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
+                #     det_resvars = np.array(det_resvars)
+                #     det_resvars = np.abs(det_resvars) # !! FIND A BETTER SOLUTION TO NEGATIVE RESVARS !!
+                #     det_resstds = np.sqrt(det_resvars)
+                #     shot_split = np.ceil(total_shots * det_resstds / np.sum(det_resstds)).astype(int).tolist()
+                #     shot_split_by_det[det] = shot_split
+
+                # print(shot_split_by_det)
+
+
+                # 3. SAME SHOT SPLIT FOR EACH DET (SUM RESVARS ACROSS DETS)
+                # resvars = []
+                # for det in dets:
+                #     if det != ref:  
+                #         mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                #                                                             nqubits, current_ucc_circ)
+                #         det_resvars = measurements.get_resvars(nqubits, sq_mats_with_coeffs, mats_with_coeffs, mcirc, mapping, shots, gaussian_noise)
+                #         # if not np.all(np.round(det_resvars, 9) > 0):
+                #         #     print(det)
+                #         #     statevec = mcirc.get_statevector()
+                #         #     with open(f"{det}_starting_statevec.npy", "wb") as f:
+                #         #         np.save(f, statevec)
+                #         #     with open(f"{det}_starting_resvar.npy", "wb") as f:
+                #         #         np.save(f, det_resvars)
+                #         resvars.append(np.abs(det_resvars).tolist())
+                # resvar_sum = np.sum(np.array(resvars), axis=0)
+                # resstd_sum = np.sqrt(resvar_sum)  # try split by residual stdev instead of resvar
+                # msmt_split = np.ceil(total_shots * resstd_sum / np.sum(resstd_sum)).astype(int).tolist()
+                # init_msmt_split = msmt_split
+                # print(init_msmt_split)
+
+                # # residual-weighted sum of resvars across dets
+                # init_resids = []  
+                # for det in dets:
+                #     if det != ref:
+                #         mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                #                                                                 nqubits, current_ucc_circ)
+                #         statevec = mcirc.get_statevector()
+                #         hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, shot_split=init_msmt_split)
+                #         overlap = measurements.measure_overlap_shots_mat(statevec, mapping, shots)
+                #         resid = pops[ref]*(hamil_overlap - (shift + hf_e) * overlap)
+                #         init_resids.append(np.abs(resid))
+
+                # init_resid_weights = np.array(init_resids) / np.sum(init_resids)
+                # init_weighted_resvars = [weight*np.array(resvars[idx]) for idx, weight in enumerate(init_resid_weights)]
+                # init_weighted_resvar_sum = np.sum(np.array(init_weighted_resvars), axis=0)
+                # init_weighted_resstd_sum = np.sqrt(init_weighted_resvar_sum)
+                # weights = (init_weighted_resstd_sum / np.sum(init_weighted_resstd_sum))  # standard weighted, more shots for larger resvar
+                # # weights = (1 - init_weighted_resvar_sum / np.sum(init_weighted_resvar_sum)) / (len(init_weighted_resvar_sum) - 1)  # reverse weighted, fewer shots for larger resvar
+                # # print(weights)
+                # msmt_split = np.ceil(total_shots * weights).astype(int).tolist()
+                # print(msmt_split)
+
+
+                # 4. EACH DET HAS DIFFERENT TOTAL SHOTS, DIFFERENT SHOT DISTRIBUTION
+                collection_mats_with_ancilla = []
+                new_shot_split_by_det = {}
+                for collection in collections:
+                    d_mat = np.zeros(shape=(2**nqubits, 2**nqubits))
+                    for op in collection:
+                        d_mat = d_mat + qubit_operator_sparse(op, nqubits).toarray()
+                    zd_mat = np.kron(Z, d_mat)
+                    collection_mats_with_ancilla.append(zd_mat)
+
+                total_shots_all_dets = NUM_DETS*total_shots
+                resvars_by_det_and_coll = []  # [[det 1: coll 1, ..., coll n], [det 2: coll 1, ..., coll n], ...]
+                for det in dets:
+                    mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                                                                        nqubits, current_ucc_circ)
+                    curr_statevec = mcirc.get_statevector()
+                    det_resvar_list = []
+                    for zd_mat in collection_mats_with_ancilla:
+                        sq_term = np.real(curr_statevec @ (zd_mat @ zd_mat) @ curr_statevec.T)
+                        term = np.real(curr_statevec @ zd_mat @ curr_statevec)
+                        det_resvar_list.append(np.round(sq_term - term**2, 9))
+                    resvars_by_det_and_coll.append(det_resvar_list)
+                all_resvars_data.append(resvars_by_det_and_coll)
+                
+                if not np.all(np.array(resvars_by_det_and_coll) >= 0):
+                    print("SERIOUS ERROR - EXACTLY COMPUTED RESVAR IS NEGATIVE AT THESE POSITIONS ([DET IDX, COLL IDX]): ")
+                    print(np.argwhere(np.array(resvars_by_det_and_coll) < 0))
+                resvar_sum_over_colls = np.sum(resvars_by_det_and_coll, axis=1)  # sum of resvar across all colls for each det
+                resstd_over_colls = np.sqrt(resvar_sum_over_colls)
+                det_total_shot_split = np.ceil(total_shots_all_dets * resstd_over_colls / np.sum(resstd_over_colls)).astype(int).tolist()
+
+                for det_idx, det in enumerate(dets):
+                    det_total_shots = det_total_shot_split[det_idx]
+                    det_resstd_list = np.sqrt(resvars_by_det_and_coll[det_idx])
+                    det_shot_split = np.ceil(det_total_shots * det_resstd_list / np.sum(det_resstd_list)).astype(int).tolist()
+                    new_shot_split_by_det[det] = det_shot_split
+
+                shot_split_by_det = new_shot_split_by_det                
+                print(shot_split_by_det)
+
+                
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                                     nqubits, current_ucc_circ)
+                statevec: np.ndarray
+                if nqubits < 11:
+                    statevec = mcirc.get_statevector()
+                else:
+                    compiled_mirc = backend.get_compiled_circuit(mcirc)
+                    all_zeros_statevec = np.zeros(2**(nqubits+1))
+                    all_zeros_statevec[0] = 1
+                    results = backend.run_circuit(compiled_mirc, 0, initial_state=all_zeros_statevec)
+                    statevec = results.get_state()
+                
                 if stoch_hamil:
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups_loc,
                                                                     mats, mcirc, mapping, shots)
                 else:
-                    hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups, mats,
-                                                                    mcirc, mapping, shots)
-                overlap = measurements.measure_overlap_shots_mat(mcirc, mapping, shots)
+                    if QWC:
+                        hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups, mats,
+                                                                        statevec, mapping, shots)
+                    else:
+                        if total_shots:
+                            msmt_split = shot_split_by_det[det] # FOR METHODS 2 OR 4 ABOVE
+                            hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, shot_split=msmt_split, backend=backend)
+                        else:
+                            hamil_overlap = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, nshots=shots, backend=backend)
+                overlap = measurements.measure_overlap_shots_mat(statevec, mapping, shots)
                 hamil_term = pops[ref]*(hamil_overlap - (shift + hf_e) * overlap)
                 if det == ref:
                     e_proj = (hamil_overlap/overlap - hf_e)
                 pop_change[det] = -time_step* hamil_term*signs[det]
-                #if det in trial_wfn:
-                #    e_proj += trial_wfn[det]*hamil_overlap
-                #    ov_proj+= trial_wfn[det]*overlap
 
 
             for det in dets:
@@ -294,20 +453,82 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                                                     mapping, spawned_dets, pops)
 
             if vary_shift and (step - step_0) % 5 == 0:
-                shift -= zeta/(5*time_step)*np.log(sum(abs(pops[x]) for x in pops)/pop_old)
+                # shift -= zeta/(5*time_step)*np.log(sum(abs(pops[x]) for x in pops)/pop_old)
                 pop_old = sum(abs(pops[x]) for x in pops)
 
             #Compute shift the first time population crosses threshold.
             if sum(abs(pops[x]) for x in pops) >= pop_thresh and not vary_shift:
+
+                # MEASUREMENT SPLIT FIRST TIME SHIFT IS NONZERO
+                # if (not QWC) and (not stoch_hamil) and total_shots:
+                #     new_shot_split_by_det = {}
+                #     collection_mats_with_ancilla = []
+                #     for collection in collections:
+                #         d_mat = np.zeros(shape=(2**nqubits, 2**nqubits))
+                #         for op in collection:
+                #             d_mat = d_mat + qubit_operator_sparse(op, nqubits).toarray()
+                #         zd_mat = np.kron(Z, d_mat)
+                #         collection_mats_with_ancilla.append(zd_mat)
+
+                #     total_shots_all_dets = NUM_DETS*total_shots
+                #     resvars_by_det_and_coll = []  # [[det 1: coll 1, ..., coll n], [det 2: coll 1, ..., coll n], ...]
+                #     for det in dets:
+                #         mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
+                #                                                             nqubits, current_ucc_circ)
+                #         curr_statevec = mcirc.get_statevector()
+                #         det_resvar_list = []
+                #         for zd_mat in collection_mats_with_ancilla:
+                #             sq_term = np.real(curr_statevec @ (zd_mat @ zd_mat) @ curr_statevec.T)
+                #             term = np.real(curr_statevec @ zd_mat @ curr_statevec)
+                #             det_resvar_list.append(np.round(sq_term - term**2, 9))
+                #         resvars_by_det_and_coll.append(det_resvar_list)
+                    
+                #     if not np.all(np.array(resvars_by_det_and_coll) >= 0):
+                #         print("SERIOUS ERROR - EXACTLY COMPUTED RESVAR IS NEGATIVE AT THESE POSITIONS ([DET IDX, COLL IDX]): ")
+                #         print(np.argwhere(np.array(resvars_by_det_and_coll) < 0))
+                #     resvar_sum_over_colls = np.sum(resvars_by_det_and_coll, axis=1)  # sum of resvar across all colls for each det
+                #     resstd_over_colls = np.sqrt(resvar_sum_over_colls)
+                #     det_total_shot_split = np.ceil(total_shots_all_dets * resstd_over_colls / np.sum(resstd_over_colls)).astype(int).tolist()
+
+                #     for det_idx, det in enumerate(dets):
+                #         det_total_shots = det_total_shot_split[det_idx]
+                #         det_resstd_list = np.sqrt(resvars_by_det_and_coll[det_idx])
+                #         det_shot_split = np.ceil(det_total_shots * det_resstd_list / np.sum(det_resstd_list)).astype(int).tolist()
+                #         new_shot_split_by_det[det] = det_shot_split
+
+                #     shot_split_by_det = new_shot_split_by_det                    
+                #     print(shot_split_by_det)
+
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, ref, nqubits,
                                                                           current_ucc_circ)
-                shift = measurements.measure_hamil_overlap_groups_matrices(groups, mats, mcirc,
-                                mapping, shots)/measurements.measure_overlap_shots_mat(mcirc,
-                                                    mapping, shots) - hf_e
+                statevec: np.ndarray
+                if nqubits < 11:
+                    statevec = mcirc.get_statevector()
+                else:
+                    compiled_mirc = backend.get_compiled_circuit(mcirc)
+                    all_zeros_statevec = np.zeros(2**(nqubits+1))
+                    all_zeros_statevec[0] = 1
+                    results = backend.run_circuit(compiled_mirc, 0, initial_state=all_zeros_statevec)
+                    statevec = results.get_state()
+
+                if QWC:
+                    shift = measurements.measure_hamil_overlap_groups_matrices(groups, mats, statevec,
+                                    mapping, shots)/measurements.measure_overlap_shots_mat(statevec,
+                                                        mapping, shots) - hf_e
+                else:
+                    if total_shots:
+                        msmt_split = shot_split_by_det[ref]  # FOR METHODS 2 OR 4 ABOVE
+                        # shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, shots, 
+                        #                                                 shot_split=msmt_split, backend=backend)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e
+                        shift = -0.03779949229141444
+                    else:
+                        # shift = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, 
+                        #                                                 shots, backend=backend)/measurements.measure_overlap_shots_mat(statevec, mapping, shots) - hf_e
+                        shift = -0.03779949229141444
                 vary_shift = True
                 step_0 = step
                 pop_old = sum(abs(pops[x]) for x in pops)
-
+            e_proj_list.append(e_proj)
             if step%10 == 0:
                 output_file.write(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+
                         str(pops[ref])+'    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
@@ -315,6 +536,8 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
             time2 = time.time()
         output_file.write('Elapsed time: '+str(time2-time1)+ ' seconds')
         output_file.close()
+        with open("e_proj_list.npy", "wb") as f:
+            np.save(f, e_proj_list)
     elif shots and gaussian_noise:
         epsilon = 1/shots
         for step in range(nsteps+1):
@@ -380,7 +603,25 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
         output_file.write('Elapsed time: '+str(time2-time1)+ ' seconds')
         output_file.close()
     else:
+        collection_mats_with_ancilla = []
+        for collection in collections:
+            d_mat = np.zeros(shape=(2**nqubits, 2**nqubits))
+            for op in collection:
+                d_mat = d_mat + qubit_operator_sparse(op, nqubits).toarray()
+            zd_mat = np.kron(Z, d_mat)
+            collection_mats_with_ancilla.append(zd_mat)
+
+        all_resvars_data = []
+        all_overlap_data = []
+        all_hamil_overlap_data = []
+        all_res_data = []
+
         for step in range(nsteps+1):
+            if step%10 == 0:
+                print(f"STEP {step}")
+
+            step_res_data = []
+            step_overlap_data = []
 
             if stoch_wfn and (depolarising_noise or damping_noise):
                 param_map = get_stoch_wfn(pops, params, dets, ref,
@@ -401,22 +642,46 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
             if stoch_hamil:
                 groups_loc = get_stoch_hamil(keys, groups, nattempts, tot_weight,
                                             group_weights_cumul, group_weights)
+
+            step_resvars_data = []
+            step_hamil_overlap_data = []
             for det in dets:
                 mcirc = euw.generate_controlled_overlap_measurement_circ(ref, det,
                                                         nqubits, current_ucc_circ)
+                statevec: np.ndarray
+                if nqubits < 11:
+                    statevec = mcirc.get_statevector()
+                # else:
+                    # do later
+                det_resvar_list = []
+                for zd_mat in collection_mats_with_ancilla:
+                    sq_term = np.real(statevec @ (zd_mat @ zd_mat) @ statevec.T)
+                    term = np.real(statevec @ zd_mat @ statevec)
+                    det_resvar_list.append(np.round(sq_term - term**2, 9))
+                step_resvars_data.append(det_resvar_list)
+                
                 if stoch_hamil:
                     hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups_loc,
                                                                   mats, mcirc, mapping)
                     overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
                     hamil_term = hamil_overlap - (shift + hf_e)*overlap
                 else:
-                    hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
-                                                                  mats, mcirc, mapping)
-                    overlap = measurements.measure_overlap_shots_mat(mcirc, mapping)
-                    hamil_term = hamil_overlap - (shift + hf_e)*overlap
+                    hamil_overlap = 0
+                    if QWC:
+                        hamil_overlap = measurements.measure_hamil_overlap_groups_matrices(groups,
+                                                                  mats, statevec, mapping)  # <phi_i | H | psi(beta)>
+                        
+                    else:
+                        hamil_overlap, det_hamil_overlap_list = measurements.measure_collection_overlap(nqubits, mats_with_coeffs, statevec, mapping, full_output=True)
+                        step_hamil_overlap_data.append(det_hamil_overlap_list)
+                    overlap = measurements.measure_overlap_shots_mat(statevec, mapping)  # <phi_i | psi(beta)>
+                    step_overlap_data.append(overlap)
+                    hamil_term = hamil_overlap - (shift + hf_e)*overlap  # residual r_i
+                    step_res_data.append(hamil_term)
                 if det == ref:
                      e_proj = hamil_overlap/overlap - hf_e
                 pop_change[det] = -time_step * pops[ref]*hamil_term*signs[det]
+            
             for det in dets:
                 pops[det] += pop_change[det]
             if vary_shift and (step - step_0) % 5 == 0:
@@ -435,6 +700,22 @@ def qc_qmc_ucc(ferm_hamil, ref, hf_e, nqubits, time_step, pop_thresh, filename, 
                 output_file.write(str(step)+'    '+str (shift)+'    '+str (e_proj)+'    '+
                         str(pops[ref])+'    ' +str(sum(abs(pops[x]) for x in pops))+'    '+
                         str({x:pops[x]/pops[ref] for x in pops})+'\n')
+                
+            all_res_data.append(step_res_data)
+            all_overlap_data.append(step_overlap_data)
+            all_resvars_data.append(step_resvars_data)
+            all_hamil_overlap_data.append(step_hamil_overlap_data)
+
+            if step%10 == 0 and step != 0:
+                with open("new_all_res_data.npy", "wb") as f:
+                    np.save(f, all_res_data)
+                with open("new_all_overlap_data.npy", "wb") as f:
+                    np.save(f, all_overlap_data)
+                with open("new_all_resvars_data.npy", "wb") as f:
+                    np.save(f, all_resvars_data)
+                with open("new_all_hamil_overlap_data.npy", "wb") as f:
+                    np.save(f, all_hamil_overlap_data)
+
         time2 = time.time()
         output_file.write('Elapsed time: '+str(time2-time1)+ ' seconds')
         output_file.close()

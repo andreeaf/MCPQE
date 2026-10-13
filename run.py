@@ -33,7 +33,7 @@ parser.add_argument("-e", "--nelectrons", dest = "nelec", type=int,
                     help="Number of electrons (should match charge and multiplicity")
 parser.add_argument("-dt", dest="dt", default=0.1, type=float,
                     help="QMC time step")
-parser.add_argument("-p", "--pop_threshold", dest="pop_thresh", default=2, type=int,
+parser.add_argument("-p", "--pop_threshold", dest="pop_thresh", default=2, type=float,
                     help="Population threshold")
 parser.add_argument("-ref", "--reference", dest="ref", type=str, default =None,
                     help="Reference determinant")
@@ -49,6 +49,8 @@ parser.add_argument("--stoch_hamil", dest="stoch_hamil", action='store_true',
                     help = "Whether to sample the hamiltonian.")
 parser.add_argument('-nattempts', dest='nattempts', default=1, type=int,
                     help = "Number of hamiltonian terms to sample beyond diagonal.")
+parser.add_argument("-coll", dest="coll_method", type=str)
+parser.add_argument("-total_shots", dest="total_shots", type=int, default=0)
 args = parser.parse_args()
 
 ref = args.ref
@@ -64,7 +66,7 @@ for i in range(len(dets)):
         dets[i][j] -= 1
 dets = [tuple(x) for x in dets]
 
-filename = args.xyzfile+'_'+args.basis+'_'+str(args.charge)+'_'+str(args.multiplicity)+'_'+str(args.nshots)+'_shots'
+filename = args.xyzfile+'_'+args.basis+'_'+str(args.charge)+'_'+str(args.multiplicity)+'_'+str(args.nshots)+'_shots_'+str(args.total_shots)+'_total_shots'
 if args.gaussian_noise:
     filename+='_gaussian'
 if args.stoch_hamil:
@@ -79,4 +81,4 @@ molecule = run_pyscf(molecule, run_scf=1, run_fci=1)
 ferm_h = normal_ordered(get_fermion_operator(molecule.get_molecular_hamiltonian()))#occupied_indices = [0], active_indices = [1,2,3,4,5,6])))
 
 print(filename)
-qc_qmc.qc_qmc_ucc(ferm_h, ref, hf_e, args.nqubits, args.dt, args.pop_thresh, filename, nsteps = args.nsteps, shots = args.nshots, dets=dets, gaussian_noise = args.gaussian_noise, stoch_hamil=args.stoch_hamil, nattempts=args.nattempts)
+qc_qmc.qc_qmc_ucc(ferm_h, ref, hf_e, args.nqubits, args.dt, args.pop_thresh, filename, nsteps=args.nsteps, coll_method=args.coll_method, shots=args.nshots, total_shots=args.total_shots, dets=dets, gaussian_noise=args.gaussian_noise, stoch_hamil=args.stoch_hamil, nattempts=args.nattempts)

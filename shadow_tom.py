@@ -52,15 +52,13 @@ def median_of_means(samples_amplitudes, num_means: int, dim: int, det_list: list
     '''
     NUM_MEANS = num_means
     DIM = dim
-    rand_inst = Random()
-
-    samples_amplitudes_split = samples_amplitudes.copy()
-    rand_inst.shuffle(samples_amplitudes_split)
-    samples_amplitudes_split = np.array_split(samples_amplitudes_split, NUM_MEANS)
+    samples_amplitudes = np.asarray(samples_amplitudes)
+    shuffled = samples_amplitudes[np.random.permutation(len(samples_amplitudes))]
+    samples_amplitudes_split = np.array_split(shuffled, NUM_MEANS)
 
     amplitude_means = []
     for amplitudes_split in samples_amplitudes_split:
-        amplitude_means.append(2 * (DIM + 1) * np.sum(np.array(amplitudes_split), axis=0) / len(amplitudes_split))
+        amplitude_means.append(2 * (DIM + 1) * np.sum(amplitudes_split, axis=0) / len(amplitudes_split))
 
     amplitudes_dict = {}
     det_wise_amplitude_means = np.array(amplitude_means).T
@@ -73,11 +71,9 @@ def median_of_means(samples_amplitudes, num_means: int, dim: int, det_list: list
 def median_of_means_singles(samples_amplitudes, num_means: int, dim: int, det_list: list[tuple[int]]):
     NUM_MEANS = num_means
     DIM = dim
-    rand_inst = Random()
-
-    samples_amplitudes_split = samples_amplitudes.copy()
-    rand_inst.shuffle(samples_amplitudes_split)
-    samples_amplitudes_split = np.array_split(samples_amplitudes_split, NUM_MEANS)
+    samples_amplitudes = np.asarray(samples_amplitudes)
+    shuffled = samples_amplitudes[np.random.permutation(len(samples_amplitudes))]
+    samples_amplitudes_split = np.array_split(shuffled, NUM_MEANS)
 
     amplitude_means = [np.average(amplitudes_split, axis=0) for amplitudes_split in samples_amplitudes_split]
     amplitudes_dict = {}
@@ -91,6 +87,126 @@ def median_of_means_singles(samples_amplitudes, num_means: int, dim: int, det_li
 def tensorproduct(*args: np.ndarray) -> np.ndarray:
     return reduce(np.kron, args)
 
+
+I = np.eye(2)
+H = (1/np.sqrt(2)) * np.array([[1,1],[1,-1]])
+F = (1/np.sqrt(2)) * np.array([[1,1j],[1,-1j]])
+CLIFFORD_SINGLE_GATES = (H, F, I)
+KETBRA_0 = np.array([[1,0],[0,0]])
+KETBRA_1 = np.array([[0,0],[0,1]])
+
+
+def make_clifford_pool(num_q: int, pool_size: int) -> np.ndarray:
+    '''Pre-generate Cliffords for shadow_state_amplitudes to draw from.'''
+
+    dim = 2 ** num_q
+    pool = np.empty((pool_size, dim, dim), dtype=np.complex128)
+    for i in range(pool_size):
+        pool[i] = random_clifford(num_q).to_matrix()
+    return pool
+
+
+def shadow_state_amplitudes(statevector: np.ndarray, target_idxs, num_samples: int,
+                            num_measurements: int, method: int, num_means: int = 10,
+                            clifford_pool: np.ndarray = None) -> np.ndarray:
+    '''Classical-shadow estimate of <basis_j|psi> for each basis index j in target_idxs.
+
+    Args:
+        statevector: state to measure, shape (2**n_qubits,)
+        target_idxs: basis indices to estimate amplitudes for
+        num_samples: number of random Cliffords
+        num_measurements: measurements per Clifford. A single int gives every
+            Clifford the same number; a sequence of num_samples counts spends an
+            exact total that num_samples need not divide.
+        method: 0 = N-qubit Clifford group, 1 = 1-qubit Cliffords with U(N)
+            integration, 2 = 1-qubit Cliffords with U(1) integration
+        num_means: chunks for the median of means
+        clifford_pool: optional pre-generated Cliffords (see make_clifford_pool)
+            to draw the num_samples from instead of generating fresh ones. Only
+            used by methods 0 and 1. 
+    Returns:
+        real amplitudes aligned with target_idxs
+        '''
+    statevector = np.asarray(statevector).flatten()
+    dim = statevector.size
+    num_q = int(round(np.log2(dim)))
+    target_idxs = np.asarray(list(target_idxs), dtype=int)
+    vacuum_idx = 0
+
+    meas_counts = np.asarray(num_measurements, dtype=int)
+    if meas_counts.ndim == 0:
+        meas_counts = np.full(num_samples, int(meas_counts), dtype=int)
+    elif meas_counts.size != num_samples:
+        raise ValueError(f"num_measurements has {meas_counts.size} entries for "
+                         f"{num_samples} Cliffords")
+    starts = np.concatenate(([0], np.cumsum(meas_counts)))
+    total_shots = int(starts[-1])
+
+    vacuum_state = np.zeros(dim, dtype=complex)
+    vacuum_state[vacuum_idx] = 1
+    state = statevector  + vacuum_state / np.sqrt(2)
+    state = state / np.linalg.norm(state)
+
+    samples_amplitudes = np.empty((total_shots, target_idxs.size), dtype=np.complex128)
+    slot_keys = list(range(target_idxs.size))
+
+    if clifford_pool is not None:
+        if method == 2:
+            raise ValueError("clifford_pool applies to methods 0 and 1; method 2 "
+                             "needs the single-qubit factors, not the product")
+        pool_idxs = np.random.choice(len(clifford_pool), size=num_samples,
+                                     replace=len(clifford_pool) < num_samples)
+
+    if method in (0, 1):
+        for sample in range(num_samples):
+            if clifford_pool is not None:
+                clifford = clifford_pool[pool_idxs[sample]]
+            elif method == 0:
+                clifford = random_clifford(num_q).to_matrix()
+            else:
+                clifford = tensorproduct(*(CLIFFORD_SINGLE_GATES[i]
+                                           for i in np.random.randint(0, 3, num_q)))
+            probs = np.abs(clifford @ state)**2
+            probs = probs / probs.sum()
+            measured_idxs = np.random.choice(dim, size=meas_counts[sample], p=probs)
+
+            samples_amplitudes[starts[sample]:starts[sample + 1]] = (
+                np.conj(clifford[np.ix_(measured_idxs, target_idxs)])
+                * clifford[measured_idxs, vacuum_idx][:, np.newaxis])
+
+        amplitudes = median_of_means(samples_amplitudes, num_means, dim, slot_keys)
+
+    elif method == 2:
+        for sample in range(num_samples):
+            single_qub_cliff_mats = [CLIFFORD_SINGLE_GATES[i]
+                                     for i in np.random.randint(0, 3, num_q)]
+            single_qub_cliff_mats_herm = [np.conjugate(mat.T) for mat in single_qub_cliff_mats]
+            clifford = tensorproduct(*single_qub_cliff_mats)
+            probs = np.abs(clifford @ state)**2
+            probs = probs / probs.sum()
+            measured_idxs = np.random.choice(dim, size=meas_counts[sample], p=probs)
+
+            unique_idxs, inverse = np.unique(measured_idxs, return_inverse=True)
+            table = np.empty((unique_idxs.size, target_idxs.size), dtype=np.complex128)
+            for row, measured_idx in enumerate(unique_idxs):
+                measured_bitstring = format(measured_idx, f"0{num_q}b")[::-1]
+                density_mat_components = []
+                for num, mat, matH in zip(measured_bitstring, single_qub_cliff_mats,
+                                          single_qub_cliff_mats_herm):
+                    ketbra_bitstring_mat = KETBRA_0 if num == "0" else KETBRA_1
+                    density_mat_components.append(3 * matH @ ketbra_bitstring_mat @ mat - _I)
+                density_mat = tensorproduct(*density_mat_components)
+                table[row] = (density_mat[vacuum_idx, target_idxs]
+                              + density_mat[target_idxs, vacuum_idx])
+
+            samples_amplitudes[starts[sample]:starts[sample + 1]] = table[inverse]
+
+        amplitudes = median_of_means_singles(samples_amplitudes, num_means, dim, slot_keys)
+
+    else:
+        raise ValueError(f"method must be 0, 1 or 2, got {method!r}")
+
+    return np.array([amplitudes[k].real for k in slot_keys])
 
 def classical_shadows(molecule: str, num_samples: int, num_measurements: int, method: int, num_means: int = 10, statevector: np.ndarray = None, calc_metrics: bool = False):
     '''Clifford shadows tomography on given state or ground state, with multiple measurements per Clifford and a median of means approach

@@ -9,6 +9,51 @@ from scipy.sparse import csc_array, csc_matrix, csr_matrix
 from scipy.sparse.linalg import eigsh
 from utils import get_molecular_geometry, dets_list_order
 
+def generate_hf_sd_dets(fermi_hamil: FermionOperator, num_q: int, num_electrons: int,
+                        tol: float = 1e-8) -> list[tuple[int]]:
+    '''Generate Hartree-Fock reference plus every symmetry-allowed single and double excitation,
+    by checking coupling through Hamiltonian matrix.
+
+    Args:
+        fermi_hamil: fermionic Hamiltonian of the active space
+        num_q: number of spin-orbitals (qubits)
+        num_electrons: number of electrons in the active space
+        tol: magnitude above which a Hamiltonian matrix element counts as a link
+
+    Returns:
+        list of determinants as occupied spin-orbital tuples, reference first
+    '''
+    ref = tuple(range(num_electrons))
+    occupied = list(ref)
+    virtual = [p for p in range(num_q) if p not in ref]
+
+    candidates = []
+    for i in occupied:                                   # singles, spin conserving
+        for a in virtual:
+            if (i - a) % 2 == 0:
+                candidates.append(tuple(sorted(set(ref) - {i} | {a})))
+    for i, j in combinations(occupied, 2):               # doubles, S_z conserving
+        for a, b in combinations(virtual, 2):
+            if sorted((i % 2, j % 2)) == sorted((a % 2, b % 2)):
+                candidates.append(tuple(sorted(set(ref) - {i, j} | {a, b})))
+
+    dets = [ref] + candidates
+    idx = [sum(2**(num_q - 1 - p) for p in d) for d in dets]
+    hamil_mat = qubit_operator_sparse(jordan_wigner(fermi_hamil), num_q)
+    coupling = np.abs(np.asarray(hamil_mat[np.ix_(idx, idx)].todense())) > tol
+
+    reachable, stack = {0}, [0]                          # component containing the reference
+    while stack:
+        current = stack.pop()
+        for other in np.nonzero(coupling[current])[0]:
+            if int(other) not in reachable:
+                reachable.add(int(other))
+                stack.append(int(other))
+
+    return [dets[k] for k in sorted(reachable)]          # index 0 is the reference
+
+
+
 def get_molecular_data() -> dict[str, tuple[FermionOperator, list[tuple[int]], int, int]]:
     '''Config data for test molecules
 
@@ -33,9 +78,12 @@ def get_molecular_data() -> dict[str, tuple[FermionOperator, list[tuple[int]], i
         hf_energy = molecule.hf_energy
         fermi_hamil = normal_ordered(get_fermion_operator(molecule.get_molecular_hamiltonian(config_tuple[2], config_tuple[3])))
 
-        det = np.genfromtxt(DATA_FOLDER_PATH + config_tuple[1], dtype=int)
-        det = det - 1
-        det = [tuple(x) for x in det]
+        if dets_source == "sd":
+            det = generate_hf_sd_dets(fermi_hamil, config_tuple[4], config_tuple[5])
+        elif dets_source == "file":
+            det = np.genfromtxt(DATA_FOLDER_PATH + config_tuple[1], dtype=int)
+            det = det - 1
+            det = [tuple(x) for x in det]
         ref = det[0]  # HARDCODED REF: ENSURE REF (HF) IS ALWAYS AT POSITION 0
         det.sort(key=lambda x: dets_list_order(x, ref))  # presort dets in preferred lexicographic order
 
